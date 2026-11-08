@@ -15,7 +15,7 @@ export const STAT_KEYS: StatKey[] = ["str", "dex", "int", "vit", "spi"];
 export type Stats = Record<StatKey, number>;
 export type SlotId = "weapon" | "head" | "chest" | "legs" | "boots" | "gloves" | "ring" | "amulet";
 export const SLOTS: SlotId[] = ["head", "chest", "legs", "boots", "gloves", "weapon", "ring", "amulet"];
-export type ZoneId = "meadow" | "desert" | "forest" | "crypt";
+export type ZoneId = "meadow" | "desert" | "forest" | "crypt" | "capital" | "coast" | "highlands" | "swamp" | "tundra" | "volcano" | "mines" | "sunken" | "dragon" | "void";
 
 export interface Appearance {
   skin: string;
@@ -67,4 +67,4 @@ export interface PlayerState {
 }
 
 export const INV_SIZE = 40;
-export const LEVEL_CAP = 40;
+export const LEVEL_CAP = 50;

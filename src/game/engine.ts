@@ -9,22 +9,24 @@ import { CLASSES } from "./data/classes";
 import { ITEMS, gearTier, rollGearDrop } from "./data/items";
 import { SKILLS, skillRankMul, type SkillDef } from "./data/skills";
 import { QUESTS, npcQuests } from "./data/quests";
-import { mobDmg, mobGold, mobHp, mobXp, mulberry } from "./data/balance";
+import { mobDmg, mobGold, mobHp, mobXp, mulberry, xpFor } from "./data/balance";
 import { SPAWN, ZONE_NAMES, addItem, mitigation, questNeedsItem, questOnReach, questAvailable, resolveItemId } from "./logic";
 import type { Appearance, ClassId, Gender, PlayerState, ZoneId } from "./types";
 import { CharacterModel, type ActionKind } from "./render/character";
 import { buildCreature, type Creature } from "./render/creatures";
 import { World, type GatherNode } from "./render/world";
 import { Vfx } from "./render/vfx";
-import { bridge, useGame, type CharInfo } from "./store";
+import { MM, PRESETS, bridge, useGame, type CharInfo, type GameEvent } from "./store";
+import { audio } from "./audio";
 
 interface Label { el: HTMLDivElement; name: HTMLElement; fill: HTMLElement; marker: HTMLElement; bubble: HTMLElement; bar: HTMLElement }
 interface Mob {
   id: string; def: MobDef; lvl: number; hp: number; maxHp: number; cr: Creature; pos: THREE.Vector3; home: THREE.Vector3; spawnR: number;
   state: "idle" | "chase" | "return" | "dead"; face: number; atkT: number; stun: number; slow: number; wanderT: number; wander: THREE.Vector3 | null;
-  dots: { end: number; next: number; dmg: number }[]; respawnAt: number; label: Label; slamT: number; slamAt: number; dmg: number; range: number; hidden: boolean; speedN: number; lvlRange: [number, number];
+  dots: { end: number; next: number; dmg: number }[]; respawnAt: number; label: Label; slamT: number; slamAt: number; dmg: number; range: number; hidden: boolean; speedN: number; lvlRange: [number, number]; raid?: boolean; noRespawn?: boolean; guardT?: number;
 }
-interface Npc { def: NpcDef; model: CharacterModel; pos: THREE.Vector3; home: THREE.Vector3; label: Label; wanderT: number; wander: THREE.Vector3 | null; face: number; barkT: number; mk: string; moving: number }
+interface EventRt { id: string; kind: "raid" | "hunter"; zone: string; title: string; desc: string; ends: number; doneAt: number; mobs: Mob[]; status: "active" | "done" | "failed"; info: string; lvl: number; hub: { x: number; z: number } }
+interface Npc { atkAt?: number; def: NpcDef; model: CharacterModel; pos: THREE.Vector3; home: THREE.Vector3; label: Label; wanderT: number; wander: THREE.Vector3 | null; face: number; barkT: number; mk: string; moving: number }
 interface Remote { id: number; name: string; model: CharacterModel; pos: THREE.Vector3; tpos: THREE.Vector3; face: number; tface: number; label: Label; moving: boolean; key: string; seen: number }
 interface Minion { cr: Creature; pos: THREE.Vector3; until: number; atkT: number; power: number; ranged: boolean; color: string; face: number }
 interface Wild { cr: Creature; pos: THREE.Vector3; home: THREE.Vector3; r: number; tgt: THREE.Vector3 | null; t: number; face: number; flee: boolean; speed: number }
@@ -63,6 +65,8 @@ export class GameEngine {
   loadingZone = false; interactLabel: string | null = null; equipKey = ""; unsub?: () => void; saving = false;
   tabIdx = 0; slams: { at: number; mob: Mob; pos: THREE.Vector3; r: number; dmg: number }[] = [];
   shake = 0; rnd = Math.random;
+  night = 0; tod = 0.4; todT = 0; evT = 0; nextEvent = 0; cullDist = 90; bloom!: UnrealBloomPass; useComposer = false; torch!: THREE.PointLight; lastFrame = 0; fpsN = 0; fpsT = 0;
+  events: EventRt[] = []; guardSpeed = 0;
   private cleanup: (() => void)[] = [];
 
   constructor(container: HTMLElement, overlay: HTMLElement, info: CharInfo) {
@@ -84,13 +88,22 @@ export class GameEngine {
     this.camera.aspect = w / h; this.camera.updateProjectionMatrix();
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(w, h), 0.32, 0.6, 0.88));
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.32, 0.6, 0.88);
+    this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
+    this.torch = new THREE.PointLight("#ffd9a0", 0, 16, 1.7); this.scene.add(this.torch);
+    this.applyGfx(true);
+    const unlock = () => { audio.resume(); };
+    window.addEventListener("pointerdown", unlock); window.addEventListener("keydown", unlock);
+    this.cleanup.push(() => { window.removeEventListener("pointerdown", unlock); window.removeEventListener("keydown", unlock); });
+    audio.onTrack = (n) => { useGame.setState({ track: n }); useGame.getState().toast(`♪ ${n}`, "info"); };
+    audio.resume();
     this.vfx = new Vfx(this.scene);
     this.bindInput();
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(this.container);
     bridge.engine = this;
+    (window as unknown as { __eng: GameEngine }).__eng = this;
     bridge.mm = () => this.minimapData();
     this.hp = ps.hp > 0 ? ps.hp : useGame.getState().derived.maxHp;
     this.mp = ps.mp;
@@ -98,6 +111,7 @@ export class GameEngine {
     this.player.face = ps.ry; this.camYaw = ps.ry + Math.PI;
     this.equipKey = JSON.stringify(ps.equipment);
     this.unsub = useGame.subscribe((s, prev) => {
+      if (s.settings !== prev.settings) this.applyGfx();
       if (s.ps.equipment !== prev.ps.equipment && JSON.stringify(s.ps.equipment) !== this.equipKey) { this.equipKey = JSON.stringify(s.ps.equipment); this.rebuildPlayer(); }
     });
     this.sync();
@@ -107,8 +121,48 @@ export class GameEngine {
   resize() {
     const w = this.container.clientWidth, h = this.container.clientHeight;
     if (!w || !h) return;
-    this.renderer.setSize(w, h); this.composer.setSize(w, h);
+    const s = useGame.getState().settings;
+    if (s.fixed !== "auto") {
+      const [fw, fh] = s.fixed.split("x").map(Number);
+      this.renderer.setPixelRatio(1); this.renderer.setSize(fw, fh, false);
+      const c = this.renderer.domElement; c.style.width = "100%"; c.style.height = "100%";
+      this.composer.setPixelRatio(1); this.composer.setSize(fw, fh); this.bloom.resolution.set(fw, fh);
+    } else {
+      const pr = Math.min(window.devicePixelRatio || 1, 2) * s.res;
+      this.renderer.setPixelRatio(pr); this.renderer.setSize(w, h, true);
+      this.composer.setPixelRatio(pr); this.composer.setSize(w, h);
+    }
     this.camera.aspect = w / h; this.camera.updateProjectionMatrix();
+  }
+
+  applyGfx(initial = false) {
+    const s = useGame.getState().settings;
+    World.shadowOn = s.shadows; World.shadowSize = s.quality === "ultra" || s.quality === "high" ? 2048 : 1024; World.viewScale = s.view;
+    this.cullDist = 45 + s.view * 70;
+    this.renderer.shadowMap.enabled = s.shadows;
+    this.useComposer = s.bloom; this.bloom.enabled = s.bloom;
+    audio.set({ master: s.master, music: s.music, sfx: s.sfx });
+    if (!initial && this.world) {
+      const sun = this.world.sun;
+      sun.castShadow = s.shadows; sun.shadow.mapSize.set(World.shadowSize, World.shadowSize);
+      const ext = World.shadowSize >= 2048 ? 60 : 42, sc = sun.shadow.camera;
+      sc.left = -ext; sc.right = ext; sc.top = ext; sc.bottom = -ext; sc.updateProjectionMatrix();
+      sun.shadow.map?.dispose(); (sun.shadow as unknown as { map: unknown }).map = null;
+      this.scene.traverse((o) => { const mt = (o as THREE.Mesh).material; if (mt) (Array.isArray(mt) ? mt : [mt]).forEach((x) => { x.needsUpdate = true; }); });
+      this.world.setTimeOfDay(this.tod);
+    }
+    this.resize();
+  }
+
+  todOverride: number | null = null;
+  calcTod() { return this.todOverride ?? ((Date.now() / 1000 + 300) % 1500) / 1500; }
+
+  autoQuality(fps: number) {
+    const st = useGame.getState(), s = st.settings;
+    if (!s.auto || fps >= 27 || s.quality === "low") return;
+    const q = s.quality === "ultra" ? "high" : s.quality === "high" ? "medium" : "low";
+    st.setSettings({ quality: q, ...PRESETS[q] });
+    this.chat("system", `Низкая частота кадров (${Math.round(fps)} FPS): графика автоматически снижена до «${{ low: "Низкая", medium: "Средняя", high: "Высокая", ultra: "Ультра" }[q]}».`);
   }
 
   dispose() {
@@ -142,6 +196,8 @@ export class GameEngine {
       else if (e.code === "KeyK" || e.code === "KeyN") st.toggleWin("skills");
       else if (e.code === "KeyL" || e.code === "KeyJ") st.toggleWin("quests");
       else if (e.code === "KeyM") st.toggleWin("map");
+      else if (e.code === "KeyO") st.toggleUi("settings");
+      else if (e.code === "KeyJ") st.toggleUi("events");
       else if (e.code === "KeyF") this.interact();
       else if (e.code === "KeyR") { useGame.setState({ autoAttack: !st.autoAttack }); }
       else if (e.code === "Space") { e.preventDefault(); if (this.player.grounded && !this.dead) { this.player.vy = 8; this.player.grounded = false; } }
@@ -298,6 +354,8 @@ export class GameEngine {
     useGame.setState({ zone: id, target: null, dialog: null, shop: null });
     this.target = null; this.targetKind = null;
     this.lastChatId = 0;
+    this.events = []; this.nextEvent = performance.now() + 40000;
+    MM.span = zone.half * 2; this.world.setTimeOfDay(this.calcTod());
     this.sync();
     await new Promise((r) => setTimeout(r, 120));
     useGame.setState({ loading: false });
@@ -308,6 +366,7 @@ export class GameEngine {
 
   travel(to: ZoneId, tx: number, tz: number) {
     if (this.loadingZone) return;
+    audio.sfx("portal");
     const st = useGame.getState();
     st.mutate((ps) => { ps.zone = to; ps.x = tx; ps.z = tz; });
     this.loadZone(to, tx, tz);
@@ -365,17 +424,17 @@ export class GameEngine {
 
   buildMinimap() {
     const z = this.world.zone;
-    const N = 180, c = document.createElement("canvas"); c.width = N; c.height = N;
+    const S = z.half * 2, N = S > 300 ? 320 : 180, c = document.createElement("canvas"); c.width = N; c.height = N;
+    const gc = new THREE.Color(z.ground.mid);
     const ctx = c.getContext("2d")!;
     const img = ctx.createImageData(N, N);
     for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-      const x = (i / N) * 200 - 100, zz = (j / N) * 200 - 100;
+      const x = (i / N) * S - S / 2, zz = (j / N) * S - S / 2;
       const h = z.height(x, zz);
-      let r = 90, g = 130, b = 70;
-      if (z.id === "desert") { r = 215; g = 185; b = 120; } else if (z.id === "forest") { r = 50; g = 100; b = 60; } else if (z.id === "crypt") { r = 60; g = 62; b = 70; }
+      let r = gc.r * 255, g = gc.g * 255, b = gc.b * 255;
       const sh = clamp(0.8 + h * 0.03, 0.5, 1.4);
       r *= sh; g *= sh; b *= sh;
-      if (h < z.waterLevel - 0.3 && z.id !== "crypt") { r = 60; g = 130; b = 190; }
+      if (h < z.waterLevel - 0.3 && !z.cave) { const wc = new THREE.Color(z.waterColor); r = wc.r * 230; g = wc.g * 230; b = wc.b * 230; }
       else if (this.world.pathDist(x, zz) < 2) { r = 190; g = 160; b = 110; }
       else if (h > 12) { r = 120; g = 118; b = 112; }
       const k = (j * N + i) * 4; img.data[k] = r; img.data[k + 1] = g; img.data[k + 2] = b; img.data[k + 3] = 255;
@@ -399,11 +458,16 @@ export class GameEngine {
   loop = () => {
     if (this.disposed) return;
     this.raf = requestAnimationFrame(this.loop);
+    const nowMs = performance.now(), cap = useGame.getState().settings.fps;
+    if (cap > 0 && nowMs - this.lastFrame < 1000 / cap - 2) return;
+    this.lastFrame = nowMs;
     const dt = Math.min(0.05, this.clock.getDelta());
     this.t += dt;
     if (this.loadingZone) { this.composer.render(); return; }
     this.update(dt);
-    this.composer.render();
+    if (this.useComposer) this.composer.render(); else this.renderer.render(this.scene, this.camera);
+    this.fpsT += dt; this.fpsN++;
+    if (this.fpsT > 6) { const f = this.fpsN / this.fpsT; this.fpsT = 0; this.fpsN = 0; this.autoQuality(f); }
   };
 
   update(dt: number) {
@@ -415,6 +479,12 @@ export class GameEngine {
     this.updateWilds(dt);
     this.updateMinions(dt);
     this.world.update(this.t, dt, this.player.pos);
+    this.todT -= dt;
+    if (this.todT <= 0) { this.todT = 0.25; this.tod = this.calcTod(); this.night = this.world.setTimeOfDay(this.tod); }
+    this.torch.position.set(this.player.pos.x, this.player.pos.y + 2.4, this.player.pos.z);
+    this.torch.intensity = (this.night > 0.12 ? this.night : 0) * (this.world.zone.cave ? 26 : 20);
+    this.evT -= dt;
+    if (this.evT <= 0) { this.evT = 1; this.updateEvents(); this.syncQuestBosses(); this.pickMusic(); this.publishEvents(); }
     this.vfx.update(dt);
     this.updateCamera(dt);
     // отложенные события
@@ -472,7 +542,7 @@ export class GameEngine {
       const fx = -Math.sin(this.camYaw), fz = -Math.cos(this.camYaw);
       const rx = -fz, rz = fx;
       const dx = fx * mz - rx * mx * -1, dz = fz * mz - rz * mx * -1;
-      const dir = tv.set(fx * mz + -rx * mx, 0, fz * mz + -rz * mx);
+      const dir = tv.set(fx * mz + rx * mx, 0, fz * mz + rz * mx);
       void dx; void dz;
       dir.normalize();
       const wet = this.world.inWater(p.pos.x, p.pos.z);
@@ -535,15 +605,18 @@ export class GameEngine {
   updateMobs(dt: number) {
     const now = performance.now();
     const p = this.player;
-    for (const m of this.mobs) {
+    const inSafe = this.inSafe();
+    for (const m of this.mobs.slice()) {
       const dp = dist2(m.pos, p.pos);
       if (m.state === "dead") {
         m.cr.tick(dt, 0, this.t);
+        if (now > m.respawnAt && m.noRespawn) { this.removeMob(m); continue; }
+        if (m.noRespawn) continue;
         if (now > m.respawnAt) this.respawnMob(m);
         else if (now > m.respawnAt - (m.def.boss ? 118000 : 22000) + 3500) { m.cr.group.visible = false; m.hidden = true; }
         continue;
       }
-      if (dp > 90 && m.state === "idle") { m.cr.group.visible = false; m.hidden = true; continue; }
+      if (dp > this.cullDist && m.state === "idle" && !m.raid) { m.cr.group.visible = false; m.hidden = true; continue; }
       if (m.hidden) { m.hidden = false; m.cr.group.visible = true; }
       // DoT
       for (let i = m.dots.length - 1; i >= 0; i--) {
@@ -556,8 +629,8 @@ export class GameEngine {
       let moveSpeed = 0;
       const sp = m.def.speed * (now < m.slow ? 0.5 : 1);
       if (m.state === "idle") {
-        const aggroR = m.def.aggro;
-        if (!this.dead && dp < aggroR && Math.abs(m.pos.y - p.pos.y) < 6 && !stunned) { m.state = "chase"; m.atkT = 0.6; }
+        const aggroR = m.def.aggro * (1 + this.night * 0.3);
+        if (!this.dead && dp < aggroR && Math.abs(m.pos.y - p.pos.y) < 6 && !stunned && !(inSafe && !m.raid)) { m.state = "chase"; m.atkT = 0.6; }
         else {
           m.wanderT -= dt;
           if (m.wanderT <= 0) { m.wanderT = 3 + Math.random() * 5; if (Math.random() < 0.7) { const a = Math.random() * 6.28, r = Math.random() * Math.min(7, m.spawnR); m.wander = new THREE.Vector3(m.home.x + Math.cos(a) * r, 0, m.home.z + Math.sin(a) * r); } else m.wander = null; }
@@ -568,7 +641,7 @@ export class GameEngine {
         }
       } else if (m.state === "chase") {
         const dh = dist2(m.pos, m.home);
-        if (this.dead || dh > 55 || (dp > m.def.aggro * 3 && dh > 25)) m.state = "return";
+        if (this.dead || dh > 55 || (dp > m.def.aggro * 3 && dh > 25) || (inSafe && !m.raid)) m.state = "return";
         else if (!stunned) {
           const stopAt = m.range * 0.85;
           if (dp > stopAt) { moveSpeed = sp; this.moveEntity(m.pos, p.pos, sp * dt, m); }
@@ -577,6 +650,7 @@ export class GameEngine {
           if (dp <= m.range && m.atkT <= 0) {
             m.atkT = m.def.atkSpeed ?? (m.def.boss ? 2.2 : 2.0);
             m.cr.attack();
+            if (dp < 30) audio.sfx(m.def.boss ? "roar" : m.def.ranged ? "bolt" : "slash", { pitch: 0.55 + Math.random() * 0.3, vol: 0.35 });
             m.face = Math.atan2(p.pos.x - m.pos.x, p.pos.z - m.pos.z);
             const dmg = m.dmg * (0.85 + Math.random() * 0.3);
             if (m.def.ranged) {
@@ -598,9 +672,13 @@ export class GameEngine {
       } else if (m.state === "return") {
         moveSpeed = sp * 1.6;
         this.moveEntity(m.pos, m.home, moveSpeed * dt, m);
-        m.hp = Math.min(m.maxHp, m.hp + m.maxHp * dt * 0.2);
-        if (dist2(m.pos, m.home) < 1.2) { m.state = "idle"; m.hp = m.maxHp; }
+        if (!m.raid) m.hp = Math.min(m.maxHp, m.hp + m.maxHp * dt * 0.2);
+        if (dist2(m.pos, m.home) < 1.2) { m.state = "idle"; if (!m.raid) m.hp = m.maxHp; }
         if (!this.dead && dp < m.def.aggro * 0.6 && dist2(m.pos, m.home) < 20) m.state = "chase";
+      }
+      if (m.raid && now > (m.guardT ?? 0)) {
+        const g = this.npcs.find((n) => n.def.id.startsWith("guard_") && dist2(n.pos, m.pos) < 3.4);
+        if (g) { m.guardT = now + 1800; m.cr.attack(); g.model.play("hit", 0.35); }
       }
       m.pos.y = this.world.groundY(m.pos.x, m.pos.z);
       m.cr.group.position.copy(m.pos);
@@ -630,6 +708,151 @@ export class GameEngine {
     if (m.def.boss) this.chat("system", `${m.def.name} возродился!`);
   }
 
+  // ======================= СТРАЖА, СОБЫТИЯ, МУЗЫКА =======================
+  inSafe() {
+    const z = this.world.zone;
+    if (z.cave) return false;
+    return Math.hypot(this.player.pos.x - z.hub.x, this.player.pos.z - z.hub.z) < z.hub.r * 0.95;
+  }
+
+  guardAI(n: Npc, dt: number): boolean {
+    const hub = this.world.zone.hub, now = performance.now();
+    let best: Mob | null = null, bd = 1e9;
+    for (const m of this.mobs) {
+      if (m.state === "dead" || m.hidden) continue;
+      const inTown = Math.hypot(m.pos.x - hub.x, m.pos.z - hub.z) < hub.r + 14 || m.raid;
+      if (!inTown) continue;
+      const d = dist2(m.pos, n.pos);
+      if (d < 24 && d < bd) { bd = d; best = m; }
+    }
+    if (!best) {
+      if (dist2(n.pos, n.home) > 3) { this.moveEntity(n.pos, n.home, 3.2 * dt, n); this.guardSpeed = 0.6; return true; }
+      return false;
+    }
+    const target = best;
+    if (bd > 2.6) { this.moveEntity(n.pos, target.pos, 4.4 * dt, n); this.guardSpeed = 0.95; return true; }
+    n.face += angDiff(n.face, Math.atan2(target.pos.x - n.pos.x, target.pos.z - n.pos.z)) * Math.min(1, dt * 10);
+    this.guardSpeed = 0;
+    if (now > (n.atkAt ?? 0)) {
+      n.atkAt = now + 1100;
+      n.model.play(Math.random() < 0.5 ? "slash" : "slash2", 0.5);
+      const dmg = Math.max(12, mobHp(target.lvl) * 0.07 * (target.def.boss ? 0.35 : 1));
+      this.later.push({ at: now + 250, fn: () => { if (target.state !== "dead") this.guardHit(target, dmg); } });
+    }
+    return true;
+  }
+
+  guardHit(m: Mob, dmg: number) {
+    dmg = Math.round(dmg);
+    m.hp -= dmg;
+    if (dist2(m.pos, this.player.pos) < 40) { audio.sfx("hit", { vol: 0.3 }); this.floatText(tv.set(m.pos.x, m.pos.y + m.cr.height + 0.3, m.pos.z), String(dmg), "dot"); }
+    this.vfx.impact(tv.set(m.pos.x, m.pos.y + 0.9, m.pos.z).clone(), "#ffe9a8", 6, 0.7);
+    if (m.hp <= 0) {
+      m.state = "dead"; m.hp = 0; m.respawnAt = performance.now() + (m.noRespawn ? 6000 : 25000);
+      m.cr.setDead(true); m.label.el.style.display = "none";
+      if (this.target === m) this.setTarget(null);
+    }
+  }
+
+  removeMob(m: Mob) {
+    m.cr.group.removeFromParent(); m.label.el.remove();
+    const i = this.mobs.indexOf(m); if (i >= 0) this.mobs.splice(i, 1);
+    if (this.target === m) this.setTarget(null);
+  }
+
+  syncQuestBosses() {
+    const ps = useGame.getState().ps, zid = this.world.zone.id;
+    for (const q of Object.values(QUESTS)) {
+      if (!q.spawn || q.zone !== zid) continue;
+      const id = `qb_${q.id}`, cur = this.mobs.find((m) => m.id === id), st = ps.quests[q.id]?.state;
+      if (st === "active" && !cur) {
+        const def = MOBS[q.spawn.mob];
+        this.spawnMob(def, q.spawn.x, q.spawn.z, 1, [q.spawn.lvl, q.spawn.lvl], id);
+        this.chat("system", `Мини-босс «${def.name}» появился в точке (${q.spawn.x}, ${q.spawn.z})!`);
+        useGame.getState().toast(`Появился мини-босс: ${def.name}`, "quest"); audio.sfx("horn");
+      } else if (st !== "active" && cur) this.removeMob(cur);
+    }
+  }
+
+  updateEvents() {
+    const now = performance.now(), z = this.world.zone;
+    for (const ev of this.events) {
+      if (ev.status !== "active") continue;
+      const alive = ev.mobs.filter((m) => m.state !== "dead" && this.mobs.includes(m));
+      if (alive.length === 0) this.finishEvent(ev, true);
+      else if (now > ev.ends || this.night < 0.12) { ev.mobs.forEach((m) => this.removeMob(m)); this.finishEvent(ev, false); }
+      else ev.info = ev.kind === "raid" ? `Осталось врагов: ${alive.length} из ${ev.mobs.length}` : `${alive[0].def.name} ещё жив`;
+    }
+    this.events = this.events.filter((e) => e.status === "active" || now - e.doneAt < 150000);
+    if (!z.cave && this.night > 0.6 && now > this.nextEvent && !this.events.some((e) => e.status === "active")) this.startEvent();
+  }
+
+  startEvent() {
+    const z = this.world.zone, now = performance.now(), hub = z.hub;
+    const defs = [...new Set(z.mobs.map((s) => MOBS[s.mob]).filter((d) => d && !d.boss))];
+    const pool = defs.length ? defs : [MOBS.wolf, MOBS.bandit, MOBS.boar];
+    const lv = z.mobs.find((s) => MOBS[s.mob] && !MOBS[s.mob].boss)?.lvl ?? [3, 6];
+    const L = Math.round((lv[0] + lv[1]) / 2);
+    const kind: "raid" | "hunter" = Math.random() < 0.65 ? "raid" : "hunter";
+    const id = `ev${Date.now()}`;
+    const ev: EventRt = { id, kind, zone: z.id, title: "", desc: "", ends: now + 5 * 60000, doneAt: 0, mobs: [], status: "active", info: "", lvl: L, hub: { x: hub.x, z: hub.z } };
+    if (kind === "raid") {
+      ev.title = `Нападение на ${ZONE_NAMES[z.id]}`;
+      ev.desc = "Ночью твари атакуют поселение! Помогите страже отбить нападение — за победу полагается награда.";
+      const n = 8 + Math.min(8, Math.floor(L / 6));
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * 6.283 + Math.random() * 0.4, r = hub.r + 45 + Math.random() * 25;
+        this.spawnMob(pool[i % pool.length], hub.x + Math.cos(a) * r, hub.z + Math.sin(a) * r, 4, [L, L + 1], `${id}_${i}`);
+        const m = this.mobs[this.mobs.length - 1];
+        m.raid = true; m.noRespawn = true; m.state = "return"; m.home.set(hub.x + (Math.random() - 0.5) * 12, 0, hub.z + (Math.random() - 0.5) * 12);
+        ev.mobs.push(m);
+      }
+    } else {
+      const base = pool[Math.floor(Math.random() * pool.length)];
+      const def: MobDef = { ...base, id: "night_hunter", name: "Ночной охотник", scale: base.scale * 1.5, tint: "#7a5cff", boss: true, hpMul: 5, dmgMul: 1.3, xpMul: 5, drops: [["hp_l", 1], ["mp_l", 1], ["mat_" + base.id, 1]] };
+      const a = Math.random() * 6.283, r = hub.r + 70;
+      ev.title = "Ночной охотник"; ev.desc = `Сильный хищник вышел на охоту у «${ZONE_NAMES[z.id]}». Победите его — добыча гарантирована!`;
+      this.spawnMob(def, hub.x + Math.cos(a) * r, hub.z + Math.sin(a) * r, 2, [L + 2, L + 2], `${id}_h`);
+      const m = this.mobs[this.mobs.length - 1]; m.noRespawn = true; ev.mobs.push(m);
+    }
+    this.events.push(ev);
+    this.nextEvent = now + 100000 + Math.random() * 90000;
+    this.chat("system", `⚠ Событие: ${ev.title}! ${ev.desc}`);
+    useGame.getState().toast(`Событие: ${ev.title}`, "bad"); audio.sfx("horn");
+  }
+
+  finishEvent(ev: EventRt, ok: boolean) {
+    ev.status = ok ? "done" : "failed"; ev.doneAt = performance.now();
+    if (!ok) { this.chat("system", `Событие «${ev.title}» завершилось.`); return; }
+    ev.info = "Победа!";
+    const near = Math.hypot(this.player.pos.x - ev.hub.x, this.player.pos.z - ev.hub.z) < 160;
+    this.chat("system", `Событие «${ev.title}» успешно завершено!`);
+    if (!near || this.dead) return;
+    const st = useGame.getState(), gold = ev.lvl * 45, xp = Math.round(xpFor(ev.lvl) * 0.2);
+    const lv = st.gainReward(xp, gold);
+    const g = rollGearDrop(this.info.cls, ev.lvl + 4, true);
+    st.mutate((ps) => { if (g) addItem(ps, g, 1); addItem(ps, "hp_l", 2); });
+    this.chat("loot", `Награда за событие: +${xp} XP, +${gold} зол.${g ? `, ${ITEMS[g]?.name}` : ""}`);
+    audio.sfx("quest"); if (lv > 0) this.onLevelUp();
+  }
+
+  publishEvents() {
+    const now = performance.now();
+    const list: GameEvent[] = this.events.map((e) => ({ id: e.id, title: e.title, desc: e.desc, zone: ZONE_NAMES[e.zone as ZoneId], ends: Date.now() + Math.max(0, e.ends - now), status: e.status, info: e.info }));
+    useGame.setState({ events: list, tod: this.tod });
+  }
+
+  pickMusic() {
+    const z = this.world.zone, p = this.player.pos, hub = z.hub;
+    const ZM: Record<string, string> = { meadow: "dawn", capital: "tavern", coast: "coast", desert: "desert", forest: "forest", crypt: "crypt", highlands: "dawn", swamp: "forest", tundra: "snow", volcano: "ash", mines: "crypt", sunken: "crypt", dragon: "battle", void: "crypt" };
+    let key = ZM[z.id] ?? "dawn";
+    const inTown = !z.cave && Math.hypot(p.x - hub.x, p.z - hub.z) < hub.r;
+    if (inTown && this.night < 0.5) key = "tavern";
+    else if (!z.cave && this.night > 0.6 && z.id !== "crypt") key = "night";
+    if (this.t - this.lastCombat < 7 && this.mobs.some((m) => m.state === "chase")) key = "battle";
+    if (key !== audio.current) audio.play(key);
+  }
+
   // ======================= БОЙ =======================
   hitMob(m: Mob, amt: number, crit: boolean, color = "#ffffff", dot = false) {
     if (m.state === "dead") return;
@@ -638,12 +861,14 @@ export class GameEngine {
     this.lastCombat = this.t;
     if (m.state === "idle" || m.state === "return") { m.state = "chase"; m.atkT = 0.8; }
     this.floatText(tv.set(m.pos.x, m.pos.y + m.cr.height + 0.3, m.pos.z), String(amt), crit ? "crit" : dot ? "dot" : "dmg");
+    if (!dot) audio.sfx(crit ? "crit" : "hit", { vol: 0.5, pitch: 0.9 + Math.random() * 0.25 });
     if (m.hp <= 0) this.killMob(m);
   }
 
   killMob(m: Mob) {
     m.state = "dead"; m.hp = 0;
-    m.respawnAt = performance.now() + (m.def.boss ? 120000 : 25000);
+    m.respawnAt = performance.now() + (m.noRespawn ? 6000 : m.def.boss ? 120000 : 25000);
+    audio.sfx("die", { vol: 0.5, pitch: m.def.boss ? 0.6 : 1 });
     m.cr.setDead(true);
     m.label.el.style.display = "none";
     const st = useGame.getState();
@@ -677,7 +902,7 @@ export class GameEngine {
 
   onLevelUp() {
     const st = useGame.getState();
-    this.vfx.levelUp(this.player.pos.clone());
+    this.vfx.levelUp(this.player.pos.clone()); audio.sfx("levelup");
     const d = st.derived;
     this.hp = d.maxHp; this.mp = d.maxMp;
     st.toast(`Новый уровень: ${st.ps.level}!  Очки навыков и характеристик получены.`, "level");
@@ -698,6 +923,7 @@ export class GameEngine {
       this.floatText(tv.set(this.player.pos.x, this.player.pos.y + 2.2, this.player.pos.z), String(dmg), "hurt");
       if (!this.player.model.acting) this.player.model.play("hit", 0.35);
       this.chat("combat", `${from} наносит вам ${dmg} урона.`);
+      audio.sfx("hurt", { vol: 0.6 });
     } else this.floatText(tv.set(this.player.pos.x, this.player.pos.y + 2.2, this.player.pos.z), "Поглощено", "miss");
     if (this.hp <= 0) this.die();
   }
@@ -807,7 +1033,7 @@ export class GameEngine {
     const color = isBasic ? ({ steel: "#e3ecff", ice: "#7fd8ff", dark: "#b25dff", blood: "#ff3050", nature: "#6dff9c" }[cls.basic.color] ?? "#fff") : skill!.color;
     const vfxKind = isBasic ? cls.basic.vfx : skill!.vfx;
     let anim: ActionKind = style === "slash" ? "slash" : style === "stab" ? "stab" : style === "cast" ? "cast" : style === "shoot" ? "shoot" : style === "bash" ? "bash" : "whip";
-    let dur = isBasic ? 0.55 : 0.7;
+    let dur = isBasic ? (style === "shoot" ? 0.85 : 0.55) : (style === "shoot" ? 0.95 : 0.7);
     if (kind === "aoe" && ["slash", "stab", "bash", "whip"].includes(style)) { anim = "spin"; dur = 0.8; }
     else if (kind === "aoet" && !["cast", "shoot"].includes(style)) { anim = "leap"; dur = 0.8; }
     else if (kind === "aoet") { anim = style === "shoot" ? "shoot" : "cast"; dur = 0.9; }
@@ -816,6 +1042,8 @@ export class GameEngine {
     else if (kind === "buff") { anim = "buff"; dur = 0.9; }
     else if (kind === "summon") { anim = "cast"; dur = 0.9; }
     p.model.play(anim, dur);
+    if (style === "shoot") audio.sfx("charge", { pitch: 0.9 + Math.random() * 0.2, vol: 0.7 });
+    if (isBasic) { if (style !== "shoot") audio.attack(this.info.cls); } else audio.skill({ id: skill!.id, vfx: skill!.vfx, color: skill!.color, kind: skill!.kind, cls: this.info.cls });
     const hand = () => tv.set(p.pos.x + Math.sin(p.face) * 0.6, p.pos.y + 1.3, p.pos.z + Math.cos(p.face) * 0.6).clone();
     const chest = (m: Mob) => tv.set(m.pos.x, m.pos.y + m.cr.height * 0.55, m.pos.z).clone();
     const power = isBasic ? 1.0 : skill!.power * skillRankMul(rank);
@@ -843,8 +1071,9 @@ export class GameEngine {
       const projectile = vfxKind === "bolt" || vfxKind === "arrow";
       for (let i = 0; i < hits; i++) {
         if (projectile) {
-          this.later.push({ at: now + 250 + i * 130, fn: () => {
+          this.later.push({ at: now + (style === "shoot" ? 430 : 250) + i * 130, fn: () => {
             if (m.state === "dead") return;
+            if (style === "shoot") audio.sfx("shoot", { pitch: 0.95 + Math.random() * 0.15 });
             this.vfx.projectile(hand(), () => chest(m), color, vfxKind === "arrow" ? "arrow" : "bolt", 30, () => { this.dealSkill(m, power, skill, rank, "impact", color, i === hits - 1 ? applyCC : undefined, true); });
           } });
         } else if (vfxKind === "beam" || vfxKind === "whip") {
@@ -1011,14 +1240,16 @@ export class GameEngine {
     const p = this.player;
     for (const n of this.npcs) {
       const dp = dist2(n.pos, p.pos);
-      n.model.group.visible = dp < 120; if (dp > 120) continue;
+      n.model.group.visible = dp < this.cullDist; if (dp > this.cullDist) continue;
       let sp = 0;
-      if (n.def.wander) {
+      const fighting = n.def.id.startsWith("guard_") && this.guardAI(n, dt);
+      if (fighting) sp = this.guardSpeed;
+      if (n.def.wander && !fighting) {
         n.wanderT -= dt;
         if (n.wanderT <= 0) { n.wanderT = 3 + Math.random() * 6; n.wander = Math.random() < 0.65 ? new THREE.Vector3(n.home.x + (Math.random() - 0.5) * 2 * n.def.wander, 0, n.home.z + (Math.random() - 0.5) * 2 * n.def.wander) : null; }
         if (n.wander && dp > 5) { const dd = dist2(n.pos, n.wander); if (dd > 0.5) { this.moveEntity(n.pos, n.wander, 1.5 * dt, n); sp = 0.3; } else n.wander = null; }
       }
-      if (dp < 6 && sp === 0) { n.face += angDiff(n.face, Math.atan2(p.pos.x - n.pos.x, p.pos.z - n.pos.z)) * Math.min(1, dt * 3); n.model.loop = this.target === n ? "talk" : (n.def.id === "pip" || n.def.id === "lunamoth" ? "cheer" : n.mk === "!" ? "wave" : undefined); }
+      if (!fighting && dp < 6 && sp === 0) { n.face += angDiff(n.face, Math.atan2(p.pos.x - n.pos.x, p.pos.z - n.pos.z)) * Math.min(1, dt * 3); n.model.loop = this.target === n ? "talk" : (n.def.id === "pip" || n.def.id === "lunamoth" ? "cheer" : n.mk === "!" ? "wave" : undefined); }
       else if (sp === 0 && dp >= 6) { n.face += angDiff(n.face, n.def.ry) * Math.min(1, dt * 1.5); n.model.loop = undefined; }
       else n.model.loop = undefined;
       n.model.setSpeed(sp);
@@ -1066,7 +1297,7 @@ export class GameEngine {
     const p = this.player;
     for (const w of this.wilds) {
       const dp = dist2(w.pos, p.pos);
-      w.cr.group.visible = dp < 100; if (dp > 100) continue;
+      const cd = this.cullDist * 0.85; w.cr.group.visible = dp < cd; if (dp > cd) continue;
       let sp = 0;
       if (dp < 7) { const a = Math.atan2(w.pos.x - p.pos.x, w.pos.z - p.pos.z); w.tgt = new THREE.Vector3(w.pos.x + Math.sin(a) * 8, 0, w.pos.z + Math.cos(a) * 8); w.flee = true; }
       else if (w.flee && dp > 12) { w.flee = false; w.tgt = null; }
@@ -1124,7 +1355,17 @@ export class GameEngine {
   // ======================= ЧАТ / СЕТЬ / СОХРАНЕНИЕ =======================
   chat(channel: "system" | "combat" | "loot" | "quest", text: string) { useGame.getState().addChat({ channel, text }); }
 
+  showBubble(l: Label, text: string, ms = 6000) {
+    const t = text.length > 90 ? text.slice(0, 88) + "…" : text;
+    l.bubble.textContent = t; l.bubble.classList.add("show");
+    const b = l.bubble as HTMLElement & { _t?: number };
+    clearTimeout(b._t); b._t = window.setTimeout(() => l.bubble.classList.remove("show"), ms);
+  }
   sendChat(text: string, channel: "world" | "zone") {
+    if (!text.startsWith("/")) this.showBubble(this.player.label, text);
+    this.sendChat0(text, channel);
+  }
+  sendChat0(text: string, channel: "world" | "zone") {
     const t = text.trim();
     if (!t) return;
     if (t.startsWith("/")) {
@@ -1154,7 +1395,7 @@ export class GameEngine {
         const d = (await res.json()) as { players: { id: number; name: string; cls: ClassId; gender: Gender; level: number; appearance: Appearance; x: number; z: number; ry: number; gear: Record<string, string> | null }[]; chat: { id: number; channel: string; name: string; cls: string; text: string }[]; lastChatId: number };
         const st = useGame.getState();
         const first = this.lastChatId === 0;
-        for (const m of d.chat) { st.addChat({ id: `s${m.id}`, channel: m.channel as "world" | "zone", name: m.name, cls: m.cls, text: m.text }); }
+        for (const m of d.chat) { const rr = [...this.remotes.values()].find((r) => r.name === m.name); if (rr && !first) this.showBubble(rr.label, m.text); st.addChat({ id: `s${m.id}`, channel: m.channel as "world" | "zone", name: m.name, cls: m.cls, text: m.text }); }
         this.lastChatId = first ? d.lastChatId : Math.max(this.lastChatId, ...d.chat.map((m) => m.id), 0);
         const now = performance.now();
         for (const o of d.players) {

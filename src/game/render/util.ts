@@ -236,3 +236,20 @@ export function assignT<T extends THREE.Object3D>(o: T, p: { position?: THREE.Ve
   if (p.rotation) o.rotation.copy(p.rotation);
   return o;
 }
+
+/** Общий источник «ободкового» света для персонажей (цвет/сила меняются по времени суток) */
+export const RIM = { color: { value: new THREE.Color("#bcd4ff") }, strength: { value: 0.32 } };
+export function rimify(m: THREE.Material | THREE.Material[]) {
+  const list = Array.isArray(m) ? m : [m];
+  for (const mat of list) {
+    if (!(mat instanceof THREE.MeshStandardMaterial) || (mat.userData as { rim?: boolean }).rim) continue;
+    (mat.userData as { rim?: boolean }).rim = true;
+    mat.onBeforeCompile = (sh) => {
+      sh.uniforms.uRimC = RIM.color; sh.uniforms.uRimS = RIM.strength;
+      sh.fragmentShader = sh.fragmentShader
+        .replace("#include <common>", "#include <common>\nuniform vec3 uRimC; uniform float uRimS;")
+        .replace("#include <opaque_fragment>", "float rimF = pow(1.0 - saturate(dot(normalize(normal), normalize(vViewPosition))), 2.6);\n outgoingLight += rimF * uRimC * uRimS * (0.35 + 0.65 * saturate(normal.y * 0.5 + 0.6));\n#include <opaque_fragment>");
+    };
+    mat.customProgramCacheKey = () => "rimlit";
+  }
+}

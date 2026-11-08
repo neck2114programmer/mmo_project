@@ -3,7 +3,8 @@ import { ZONES, type ZoneDef } from "../data/zones";
 import type { ZoneId } from "../types";
 import { fbm, noise2, smoothstep, mulberry, lerp } from "../data/balance";
 import { NPCS } from "../data/world";
-import { WIND, basicMat, canvasTexture, glowTexture, mesh, sphere, stdMat, blobGeo } from "./util";
+import { WIND, RIM, basicMat, canvasTexture, glowTexture, mesh, sphere, stdMat, blobGeo } from "./util";
+import { ZONE_TINT } from "../data/zones2";
 import { getFlora } from "./flora";
 import { buildStructure, type Struct } from "./structures";
 
@@ -141,7 +142,7 @@ export class World {
     return false;
   }
   walkable(x: number, z: number): boolean {
-    const half = this.zone.cave ? 90 : 97;
+    const half = this.zone.cave ? this.zone.half - 10 : this.zone.half - 3;
     if (this.zone.cave ? Math.hypot(x, z) > half : Math.abs(x) > half || Math.abs(z) > half) return false;
     const th = this.zone.height(x, z);
     if (th < this.zone.waterLevel - 0.55) {
@@ -192,7 +193,7 @@ export class World {
         }
       });
       const rnd = mulberry(7);
-      const cm = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, fog: false, opacity: this.zone.id === "desert" ? 0.5 : 0.9 });
+      const cm = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, fog: false, opacity: this.zone.id === "desert" ? 0.5 : 0.9 }); this.cloudMat = cm;
       for (let i = 0; i < 14; i++) {
         const c = new THREE.Mesh(new THREE.PlaneGeometry(260 + rnd() * 160, 130 + rnd() * 80), cm);
         c.rotation.x = -Math.PI / 2; c.rotation.z = rnd() * 6;
@@ -204,18 +205,28 @@ export class World {
     }
   }
 
+  static shadowSize = 1024;
+  static shadowOn = true;
+  static viewScale = 1;
+  hemi!: THREE.HemisphereLight; amb!: THREE.AmbientLight;
+  stars?: THREE.Points; moonMesh?: THREE.Mesh; cloudMat?: THREE.MeshBasicMaterial;
+  sunDir = new THREE.Vector3(0.3, 1, 0.3).normalize();
+  night = 0; tod = 0.4;
+  private tmpC = new THREE.Color();
   private buildLights() {
     const s = this.zone.sky;
     const hemi = new THREE.HemisphereLight(s.hemiSky, s.hemiGround, s.hemiInt);
     const amb = new THREE.AmbientLight(s.amb, s.ambInt * 0.5);
     const sun = new THREE.DirectionalLight(s.sun, s.sunInt);
     sun.position.set(...s.sunPos);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.castShadow = World.shadowOn;
+    sun.shadow.mapSize.set(World.shadowSize, World.shadowSize);
     const sc = sun.shadow.camera;
-    sc.left = -55; sc.right = 55; sc.top = 55; sc.bottom = -55; sc.near = 10; sc.far = 400;
+    const ext = World.shadowSize >= 2048 ? 60 : World.shadowSize >= 1024 ? 42 : 30;
+    sc.left = -ext; sc.right = ext; sc.top = ext; sc.bottom = -ext; sc.near = 10; sc.far = 400;
     sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.06;
     this.group.add(hemi, amb, sun, sun.target);
+    this.hemi = hemi; this.amb = amb;
     this.sunRef = sun;
     const n = this.zone.id === "crypt" ? 6 : 3;
     for (let i = 0; i < n; i++) {
@@ -223,12 +234,68 @@ export class World {
       this.group.add(l);
       this.fireLights.push(l);
     }
+    if (!this.zone.cave) {
+      const N = 700, pos = new Float32Array(N * 3), rnd = mulberry(5);
+      for (let i = 0; i < N; i++) {
+        const u = rnd() * 2 - 1, a = rnd() * 6.283, r = Math.sqrt(1 - u * u);
+        pos[i * 3] = Math.cos(a) * r * 850; pos[i * 3 + 1] = Math.abs(u) * 850 * 0.95 + 20; pos[i * 3 + 2] = Math.sin(a) * r * 850;
+      }
+      const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+      this.stars = new THREE.Points(g, new THREE.PointsMaterial({ color: "#ffffff", size: 2.2, sizeAttenuation: false, transparent: true, opacity: 0, depthWrite: false, fog: false }));
+      this.stars.frustumCulled = false; this.stars.renderOrder = -9;
+      this.skyMesh.add(this.stars);
+      this.moonMesh = new THREE.Mesh(new THREE.CircleGeometry(38, 32), new THREE.MeshBasicMaterial({ map: canvasTexture(128, 128, (ctx, w, h) => {
+        const gr = ctx.createRadialGradient(w / 2, h / 2, 4, w / 2, h / 2, w / 2); gr.addColorStop(0, "#fffbe8"); gr.addColorStop(0.55, "#e9eefc"); gr.addColorStop(0.62, "rgba(190,210,255,0.5)"); gr.addColorStop(1, "rgba(150,180,255,0)");
+        ctx.fillStyle = gr; ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = "rgba(150,160,190,0.35)"; for (const [x, y, r] of [[52, 56, 9], [74, 70, 6], [60, 80, 5]]) { ctx.beginPath(); ctx.arc(x, y, r, 0, 6.28); ctx.fill(); }
+      }), transparent: true, depthWrite: false, fog: false }));
+      this.moonMesh.renderOrder = -8; this.skyMesh.add(this.moonMesh);
+    }
   }
+
+  /** tod: 0..1 (0.25 рассвет, 0.5 полдень, 0.75 закат, 0 — полночь). Возвращает ночность 0..1 */
+  setTimeOfDay(tod: number) {
+    this.tod = tod;
+    if (this.zone.cave) { this.night = 1; return 1; }
+    const sk = this.zone.sky;
+    const a = (tod - 0.25) * Math.PI * 2;
+    const elev = Math.sin(a);
+    const day = smoothstep(-0.1, 0.28, elev);
+    const night = 1 - day;
+    const dusk = Math.max(0, 1 - Math.abs(elev) / 0.32);
+    this.night = night;
+    this.sunDir.set(Math.cos(a) * 0.85, elev, 0.42).normalize();
+    const C = (h: string) => this.tmpC.set(h);
+    const mix = (u: THREE.Color, base: string, nightCol: string, dusk_?: string, k = 0.55) => {
+      u.set(base).lerp(C(nightCol), night);
+      if (dusk_) u.lerp(C(dusk_), dusk * k);
+    };
+    const U = this.skyUniforms;
+    mix(U.uTop.value, sk.top, "#050b20"); mix(U.uMid.value, sk.mid, "#0c1a3c", "#6a4a7a", 0.4); mix(U.uHor.value, sk.horizon, "#18284e", "#ff8a4a", 0.7);
+    U.uSun.value.copy(this.sunDir);
+    U.uSunCol.value.set(sk.sun).lerp(C("#ff9a50"), dusk * 0.6);
+    const fog = this.scene.fog as THREE.Fog | null;
+    if (fog) { mix(fog.color, sk.fog, "#0a1228", "#d88a5a", 0.45); fog.near = sk.fogNear * World.viewScale; fog.far = sk.fogFar * World.viewScale * (1 - night * 0.2); }
+    mix(this.hemi.color, sk.hemiSky, "#2a3f7a"); mix(this.hemi.groundColor, sk.hemiGround, "#0a0c18");
+    this.hemi.intensity = sk.hemiInt * (0.32 + 0.68 * day);
+    this.amb.color.set(sk.amb).lerp(C("#3a4a8a"), night); this.amb.intensity = sk.ambInt * 0.5 * (0.45 + 0.55 * day);
+    const sunI = sk.sunInt * smoothstep(0.0, 0.3, elev);
+    const moonI = 0.85 * smoothstep(0.0, 0.3, -elev);
+    if (elev >= 0) { this.sunRef.color.set(sk.sun).lerp(C("#ff9a50"), dusk * 0.7); this.sunRef.intensity = Math.max(0.02, sunI); this.lightDir.copy(this.sunDir); }
+    else { this.sunRef.color.set("#8aa6ff"); this.sunRef.intensity = Math.max(0.02, moonI); this.lightDir.set(-this.sunDir.x, -this.sunDir.y, -this.sunDir.z * 0.5 + 0.2).normalize(); }
+    if (this.stars) (this.stars.material as THREE.PointsMaterial).opacity = Math.max(0, night * 1.2 - 0.2);
+    if (this.moonMesh) { this.moonMesh.position.copy(this.sunDir).multiplyScalar(-780); this.moonMesh.lookAt(0, 0, 0); this.moonMesh.visible = elev < 0.1; }
+    if (this.cloudMat) { this.cloudMat.color.setScalar(0.25 + 0.75 * day); this.cloudMat.color.lerp(C("#ffb08a"), dusk * 0.3); }
+    RIM.color.value.set("#bcd4ff").lerp(C("#ffb97a"), dusk * 0.7).lerp(C("#5a7ad8"), night * 0.8);
+    RIM.strength.value = 0.2 + 0.2 * (1 - night * 0.5);
+    return night;
+  }
+  lightDir = new THREE.Vector3(0.3, 1, 0.3);
 
   // ---------- Ландшафт ----------
   private buildTerrain() {
     const z = this.zone;
-    const size = 250, seg = 200;
+    const size = z.half * 2 + 50, seg = Math.min(420, Math.round(size / 1.25));
     const geo = new THREE.PlaneGeometry(size, size, seg, seg);
     geo.rotateX(-Math.PI / 2);
     const p = geo.attributes.position;
@@ -374,7 +441,7 @@ export class World {
     const z = this.zone;
     const rnd = mulberry(z.id.length * 977 + 13);
     const blockers = this.blockers();
-    const tint: Record<string, [number, number, number]> = { meadow: [1, 1, 0.95], desert: [1, 0.98, 0.9], forest: [0.82, 0.95, 0.92], crypt: [0.55, 0.6, 0.7] };
+    const tint: Record<string, [number, number, number]> = { meadow: [1, 1, 0.95], desert: [1, 0.98, 0.9], forest: [0.82, 0.95, 0.92], crypt: [0.55, 0.6, 0.7], ...(ZONE_TINT as Record<string, [number, number, number]>) };
     const baseTint = tint[z.id];
     const byKind = new Map<string, { mats: THREE.Matrix4[]; cols: THREE.Color[] }>();
     const tmpV = new THREE.Vector3();
@@ -386,8 +453,8 @@ export class World {
       while (placed < rule.n && tries++ < max) {
         let x: number, zz: number;
         if (rule.region) { const a = rnd() * Math.PI * 2, r = Math.sqrt(rnd()) * rule.region.r; x = rule.region.x + Math.cos(a) * r; zz = rule.region.z + Math.sin(a) * r; }
-        else { x = (rnd() - 0.5) * 2 * 95; zz = (rnd() - 0.5) * 2 * 95; }
-        if (z.cave ? Math.hypot(x, zz) > 84 : Math.abs(x) > 98 || Math.abs(zz) > 98) continue;
+        else { x = (rnd() - 0.5) * 2 * (z.half - 5); zz = (rnd() - 0.5) * 2 * (z.half - 5); }
+        if (z.cave ? Math.hypot(x, zz) > z.half - 16 : Math.abs(x) > z.half - 2 || Math.abs(zz) > z.half - 2) continue;
         const h = z.height(x, zz);
         const isReed = rule.kind === "reeds";
         if (!isReed && h < z.waterLevel + 0.3 && z.id !== "crypt") continue;
@@ -435,7 +502,7 @@ export class World {
     const mats: THREE.Matrix4[] = [], cols: THREE.Color[] = [];
     let tries = 0;
     while (mats.length < count && tries++ < count * 4) {
-      const x = (rnd() - 0.5) * 2 * 96, zz = (rnd() - 0.5) * 2 * 96;
+      const x = (rnd() - 0.5) * 2 * (z.half - 4), zz = (rnd() - 0.5) * 2 * (z.half - 4);
       const h = z.height(x, zz);
       if (h < z.waterLevel + 0.5 || h > 11) continue;
       if (noise2(x * 0.06 + 5, zz * 0.06) < 0.28 && rnd() < 0.8) continue;
@@ -581,8 +648,8 @@ export class World {
     this.cloudGroup.position.set(focus.x + t * 2, 0, focus.z + t * 1.2);
     this.cloudGroup.children.forEach((c) => { c.position.x = ((c.position.x + 450 - t * 0.02) % 900) - 450 + 0; });
     // солнце и тени следуют за игроком
-    const s = this.zone.sky.sunPos;
-    this.sunRef.position.set(focus.x + s[0], focus.y + s[1], focus.z + s[2]);
+    const ld = this.zone.cave ? new THREE.Vector3(...this.zone.sky.sunPos).normalize() : this.lightDir;
+    this.sunRef.position.set(focus.x + ld.x * 150, focus.y + Math.max(ld.y, 0.15) * 150, focus.z + ld.z * 150);
     this.sunRef.target.position.copy(focus);
     // огни
     if (this.fires.length && this.fireLights.length) {
@@ -591,7 +658,7 @@ export class World {
         const f = sorted[i];
         if (!f) { l.intensity = 0; return; }
         l.position.set(f.x, f.y, f.z); l.color.set(f.color);
-        l.intensity = (this.zone.id === "crypt" ? 40 : 30) * (0.85 + Math.sin(t * 12 + i * 3) * 0.1 + Math.sin(t * 7.3 + i) * 0.05);
+        l.intensity = (this.zone.id === "crypt" ? 40 : 30) * (0.55 + this.night * 0.9) * (0.85 + Math.sin(t * 12 + i * 3) * 0.1 + Math.sin(t * 7.3 + i) * 0.05);
       });
     }
     this.pts.forEach((p) => p.fn(t, focus));

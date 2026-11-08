@@ -56,7 +56,7 @@ export function SkillTip({ s, rank }: { s: SkillDef; rank: number }) {
   const parent = s.parent ? SKILLS[s.parent] : null;
   return (
     <div>
-      <h5 style={{ color: s.type === "passive" ? "#9dd8ff" : "#ffd88a" }}>{s.icon} {s.name}</h5>
+      <h5 style={{ color: s.type === "passive" ? "#9dd8ff" : "#ffd88a", display: "flex", alignItems: "center", gap: 6 }}><Ic v={s.icon} size="28px" /> {s.name}</h5>
       <div className="sub">{s.type === "passive" ? "Пассивный навык" : "Активный навык"} • Требуется ур. {s.reqLevel} • Ранг {rank}/{s.maxRank}</div>
       <div>{skillDescription(s, Math.max(1, rank))}</div>
       {rank > 0 && rank < s.maxRank && <div style={{ color: "#8fff9a", marginTop: 4 }}>След. ранг: {skillDescription(s, rank + 1).split("(")[1]?.replace(")", "")}</div>}
@@ -95,4 +95,10 @@ export function Window({ title, onClose, style, children }: { title: string; onC
       <div className="win-body">{children}</div>
     </div>
   );
+}
+
+/** Иконка: SVG data-URL (навыки, классы) или обычный текст/эмодзи (предметы) */
+export function Ic({ v, fill, size }: { v: string; fill?: boolean; size?: string }) {
+  if (!v?.startsWith("data:")) return <>{v}</>;
+  return <img src={v} alt="" draggable={false} className={fill ? "ic-fill" : "ic-inline"} style={size ? { width: size, height: size } : undefined} />;
 }

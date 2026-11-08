@@ -442,6 +442,11 @@ export function buildCreature(def: MobDef): Creature {
     case "fox": c = new Quadruped({ fur: "#e8802a", belly: "#fff4e0", snout: 1.5, ears: 1.4, tail: "bushy", eye: "#202020", stocky: 0.6, headSize: 0.85, legLen: 0.17 }); break;
     case "drake": c = new Quadruped({ fur: "#d04a3a", belly: "#f0c070", snout: 1.5, ears: 0.8, tail: "thin", eye: "#ffe040", stocky: 0.8, glow: true, spikes: true, legLen: 0.2 }); break;
     case "shadow": c = new Ghost("#7a5cff"); break;
+    case "dog": c = new Quadruped({ fur: def.tint ?? "#a0764a", belly: "#f0e0c8", snout: 1.2, ears: 0.9, tail: "bushy", eye: "#201010", stocky: 0.6, headSize: 0.9, legLen: 0.17 }); break;
+    case "cat": c = new Quadruped({ fur: def.tint ?? "#8a8a92", belly: "#f4f0e8", snout: 0.7, ears: 1.2, tail: "thin", eye: "#40c040", stocky: 0.42, headSize: 0.8, legLen: 0.12 }); break;
+    case "sheep": c = new Quadruped({ fur: "#f2f0e8", belly: "#f6f4ee", snout: 0.9, ears: 0.8, tail: "short", eye: "#202020", stocky: 1.15, headSize: 0.8, legLen: 0.16, bristle: true }); break;
+    case "cow": c = new Quadruped({ fur: "#e8e4dc", belly: "#c8b8a0", snout: 1.1, ears: 1.0, tail: "thin", eye: "#202020", stocky: 1.25, headSize: 1.0, legLen: 0.26 }); break;
+    case "chicken": c = new Quadruped({ fur: "#f4ece0", belly: "#fff8ee", snout: 0.5, ears: 0.1, tail: "short", eye: "#202020", stocky: 0.36, headSize: 0.6, legLen: 0.1 }); break;
     default: c = new Slime(tint);
   }
   c.group.scale.setScalar(def.scale);

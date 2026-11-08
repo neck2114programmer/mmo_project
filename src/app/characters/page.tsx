@@ -6,6 +6,7 @@ import {
   ACCENT_COLORS, BROW_NAMES, CLASS_LIST, CLASSES, EAR_NAMES, EYE_COLORS, EYE_NAMES, HAIR_COLORS, HAIR_NAMES, MARK_COLORS, MARK_NAMES, SKIN_TONES,
   TAIL_NAMES, defaultAppearance, randomAppearance,
 } from "@/game/data/classes";
+import { Ic } from "@/components/ui";
 import { SKILLS_BY_CLASS } from "@/game/data/skills";
 import { gearTier } from "@/game/data/items";
 import type { Appearance, ClassId, Gender, PlayerState } from "@/game/types";
@@ -121,7 +122,7 @@ export default function CharactersPage() {
               {chars.map((c) => (
                 <div key={c.id} className={`char-slot ${sel === c.id ? "sel" : ""}`} onClick={() => setSel(c.id)}>
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    <div style={{ fontSize: 34 }}>{CLASSES[c.cls].icon}</div>
+                    <div style={{ width: 44, height: 44 }}><Ic v={CLASSES[c.cls].icon} size="44px" /></div>
                     <div style={{ flex: 1 }}>
                       <div style={{ fontWeight: 900, fontSize: 17 }}>{c.name}</div>
                       <div style={{ fontSize: 12, color: CLASSES[c.cls].color }}>{CLASSES[c.cls].name} • {c.gender === "female" ? "♀" : "♂"} • ур. {c.level}</div>
@@ -171,7 +172,7 @@ export default function CharactersPage() {
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {CLASS_LIST.map((c) => (
               <div key={c.id} className={`cls-card ${cls === c.id ? "sel" : ""}`} onClick={() => setCls(c.id)}>
-                <div style={{ fontSize: 30, width: 38, textAlign: "center" }}>{c.icon}</div>
+                <div style={{ width: 40, height: 40 }}><Ic v={c.icon} size="40px" /></div>
                 <div>
                   <div style={{ fontWeight: 900, color: c.color }}>{c.name}</div>
                   <div style={{ fontSize: 11, color: "var(--muted)" }}>{c.role}</div>
@@ -185,7 +186,7 @@ export default function CharactersPage() {
         <div className="panel" style={{ position: "relative", overflow: "hidden", minHeight: 0 }}>
           <CharacterPreview cls={cls} gender={gender} app={app} armorTier={showTier} weaponTier={showTier} head={false} focus={tab === "face" || tab === "hair" ? "face" : "body"} anim={anim} />
           <div style={{ position: "absolute", top: 14, left: 16, right: 16, pointerEvents: "none" }}>
-            <div className="title-font" style={{ fontSize: 30, color: cd.color }}>{cd.icon} {cd.name}</div>
+            <div className="title-font" style={{ fontSize: 30, color: cd.color }}><span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}><Ic v={cd.icon} size="40px" /> {cd.name}</span></div>
             <div style={{ fontSize: 13, color: "#d8d6e8", maxWidth: 520, lineHeight: 1.45, textShadow: "0 1px 4px #000" }}>{cd.desc}</div>
             <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
               <span className="chip">⚔ {cd.weaponKind}</span><span className="chip">🛡 {{ cloth: "Ткань", leather: "Кожа", mail: "Кольчуга", plate: "Латы" }[cd.armor]}</span><span className="chip">✨ {cd.role}</span>
@@ -251,7 +252,7 @@ export default function CharactersPage() {
             )}
             <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px dashed var(--line)" }}>
               <label className="label">Стартовые навыки класса</label>
-              {skillsPreview.map((s) => <div key={s.id} style={{ fontSize: 12, color: "#d8d6e8", marginBottom: 3 }}>{s.icon} <b>{s.name}</b></div>)}
+              {skillsPreview.map((s) => <div key={s.id} style={{ fontSize: 12, color: "#d8d6e8", marginBottom: 3 }}><Ic v={s.icon} size="18px" /> <b>{s.name}</b></div>)}
               <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>Всего в дереве: 30 навыков (активные и пассивные)</div>
             </div>
           </div>

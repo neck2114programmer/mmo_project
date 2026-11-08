@@ -75,3 +75,6 @@ export const NPCS: Record<string, NpcDef> = {};
   N({ id: "elara", name: "Жрица Элара", title: "Целительница склепа", zone: "crypt", x: 6, z: 72, ry: 3.4, gender: "female", cls: "mage", look: { hair: 1, hairColor: "#f5f5f5", skin: "#e8e4f0", eyeColor: "#f2b632", accent: "#ecf0f1" }, tier: 4, vendor: { kind: "potion", maxTier: 5 }, lines: ["Исцеляю раненых героев."] }),
   N({ id: "merchant_c", name: "Бродячий торговец Зорн", title: "Редкое снаряжение", zone: "crypt", x: -6, z: 72, ry: 2.9, gender: "male", cls: "assassin", look: { hair: 6, hairColor: "#c43c3c", skin: "#c98b5e", mark: 1 }, tier: 4, vendor: { kind: "armor", maxTier: 5 }, lines: ["Лучшее снаряжение — в самом сердце тьмы!"] }),
 ].forEach((n) => (NPCS[n.id] = n));
+import { NEW_MOBS, NEW_NPCS } from "./gen";
+Object.assign(MOBS, NEW_MOBS);
+for (const n of NEW_NPCS) NPCS[n.id] = n;

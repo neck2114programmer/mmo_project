@@ -1,7 +1,7 @@
-export const xpFor = (level: number) => Math.round(60 * Math.pow(level, 1.8));
-export const mobHp = (lvl: number) => Math.round(50 + Math.pow(lvl, 1.9) * 8);
-export const mobDmg = (lvl: number) => 6 + lvl * lvl * 0.35 + lvl * 3;
-export const mobXp = (lvl: number) => Math.round(10 + lvl * lvl * 0.9 + lvl * 10);
+export const xpFor = (level: number) => Math.round(95 * Math.pow(level, 2.0));
+export const mobHp = (lvl: number) => Math.round(90 + Math.pow(lvl, 2.0) * 10);
+export const mobDmg = (lvl: number) => (6 + lvl * lvl * 0.35 + lvl * 3) * 1.3;
+export const mobXp = (lvl: number) => Math.round((10 + lvl * lvl * 0.9 + lvl * 10) * 0.55);
 export const mobGold = (lvl: number) => Math.round(1 + lvl * 1.6);
 
 // ---- детерминированный шум и random ----

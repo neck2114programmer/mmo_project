@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { useGame, bridge, type WinKey } from "@/game/store";
+import { useGame, bridge, MM, type WinKey } from "@/game/store";
 import { CLASSES } from "@/game/data/classes";
 import { SKILLS } from "@/game/data/skills";
 import { ITEMS } from "@/game/data/items";
@@ -9,7 +9,8 @@ import { ZONE_NAMES, countItem, questObjProgress, questObjTarget } from "@/game/
 import { xpFor } from "@/game/data/balance";
 import { ZONES } from "@/game/data/zones";
 import { LEVEL_CAP } from "@/game/types";
-import { ItemTip, SkillTip, TipLayer, tipProps } from "./ui";
+import { Ic, ItemTip, SkillTip, TipLayer, tipProps } from "./ui";
+import { EventsWidget, SettingsWindow } from "./Settings";
 import { DialogWindow, ShopWindow, InventoryWindow, CharacterWindow, SkillsWindow, QuestWindow, MapWindow } from "./Windows";
 
 function useNow(ms = 100) {
@@ -35,7 +36,7 @@ function PlayerFrame() {
   return (
     <div style={{ position: "absolute", left: 16, top: 16, width: 330 }}>
       <div className="frame" style={{ padding: "10px 14px 10px 10px", display: "flex", gap: 12, alignItems: "center" }}>
-        <div className="portrait" style={{ borderColor: c.color, boxShadow: `0 0 16px ${c.color}66` }}>{c.icon}<span className="lvl-badge">{ps.level}</span></div>
+        <div className="portrait" style={{ borderColor: c.color, boxShadow: `0 0 16px ${c.color}66` }}><Ic v={c.icon} fill /><span className="lvl-badge">{ps.level}</span></div>
         <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
             <b className="title-font" style={{ fontSize: 18, letterSpacing: "0.04em" }}>{char.name}</b>
@@ -49,7 +50,7 @@ function PlayerFrame() {
       {buffs.length > 0 && (
         <div style={{ display: "flex", gap: 5, marginTop: 6 }}>
           {buffs.map((b) => (
-            <div key={b.id} className="buff" style={{ borderColor: b.color }} {...tipProps(() => <div><h5>{b.icon} {b.name}</h5><div>Осталось: {Math.max(0, Math.round((b.end - performance.now()) / 1000))} с</div></div>)}>{b.icon}</div>
+            <div key={b.id} className="buff" style={{ borderColor: b.color }} {...tipProps(() => <div><h5><Ic v={b.icon} size="24px" /> {b.name}</h5><div>Осталось: {Math.max(0, Math.round((b.end - performance.now()) / 1000))} с</div></div>)}><Ic v={b.icon} fill /></div>
           ))}
         </div>
       )}
@@ -97,7 +98,7 @@ function Minimap() {
       ctx.fillStyle = "#0a0c14"; ctx.fillRect(0, 0, S, S);
       ctx.translate(R, R); ctx.rotate(d.yaw);
       ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(mm, -(d.px + 100) * sc, -(d.pz + 100) * sc, 200 * sc, 200 * sc);
+      ctx.drawImage(mm, -(d.px + MM.span / 2) * sc, -(d.pz + MM.span / 2) * sc, MM.span * sc, MM.span * sc);
       const dot = (x: number, z: number, c: string, r: number) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc((x - d.px) * sc, (z - d.pz) * sc, r, 0, 7); ctx.fill(); ctx.strokeStyle = "rgba(0,0,0,0.6)"; ctx.lineWidth = 1; ctx.stroke(); };
       d.portals.forEach(([x, z]) => dot(x, z, "#b88aff", 6));
       d.npcs.forEach(([x, z, mk]) => dot(x, z, mk === "!" ? "#ffe36a" : mk === "?" ? "#7dff9a" : "#6ac8ff", 4));
@@ -233,7 +234,7 @@ function Hotbar() {
               draggable={!!id && id !== "basic"} onDragStart={(e) => { if (id) e.dataTransfer.setData("text/plain", id.startsWith("item:") ? id : `skill:${id}`); }}
               {...(tipNode ? tipProps(() => tipNode) : {})}>
               <span className="key">{KEYS[i]}</span>
-              {icon}
+              <Ic v={icon} fill />
               {count > 0 && <span className="cnt">{count}</span>}
               {noMp && id && !id.startsWith("item:") && <div className="nomp" />}
               {showCd > 0 && <div className="cd" style={{ background: `linear-gradient(0deg, rgba(0,0,0,0.78) ${Math.min(100, (showCd / Math.max(0.5, cdTotal)) * 100)}%, rgba(0,0,0,0.35) 0)` }}>{showCd >= 1 ? Math.ceil(showCd) : showCd.toFixed(1)}</div>}
@@ -270,6 +271,8 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
 }
 
 export default function GameHUD() {
+  const ui = useGame((s) => s.ui);
+  const toggleUi = useGame((s) => s.toggleUi);
   const { win, dialog, shop, dead, loading, loadingText, interact, zone } = useGame();
   const [help, setHelp] = useState(false);
   useEffect(() => {
@@ -297,6 +300,8 @@ export default function GameHUD() {
       {win.skills && <SkillsWindow onClose={() => toggle("skills")} />}
       {win.quests && <QuestWindow onClose={() => toggle("quests")} />}
       {win.map && <MapWindow onClose={() => toggle("map")} />}
+      <EventsWidget />
+      {ui.settings && <SettingsWindow onClose={() => toggleUi("settings")} />}
       {dialog && <DialogWindow npc={dialog} />}
       {shop && <ShopWindow npc={shop} />}
       <div style={{ position: "absolute", right: 16, bottom: 16, display: "flex", gap: 6 }}>

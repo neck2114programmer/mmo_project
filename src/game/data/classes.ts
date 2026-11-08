@@ -159,3 +159,11 @@ export function randomAppearance(gender: Gender): Appearance {
     accent: pick(ACCENT_COLORS),
   };
 }
+
+// ---- стильные SVG-иконки вместо смайликов ----
+import { makeIcon, CLASS_GLYPH } from "./icons";
+const ELEM: Record<string, string> = { steel: "#e3ecff", ice: "#7fd8ff", dark: "#b25dff", fire: "#ff6a2b", bolt: "#ffe45e", nature: "#6dff9c", gold: "#ffcc4d", poison: "#8dff4d" };
+for (const c of Object.values(CLASSES)) {
+  c.basic.icon = makeIcon(c.basic.icon, { color: ELEM[c.basic.color] ?? c.color, tier: 1 });
+  c.icon = makeIcon(CLASS_GLYPH[c.id] ?? c.icon, { color: c.color, cls: true, tier: 5 });
+}

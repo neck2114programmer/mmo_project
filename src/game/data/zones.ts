@@ -1,5 +1,6 @@
 import type { ZoneId } from "../types";
 import { fbm, noise2, smoothstep, lerp } from "./balance";
+import { EXTRA_ZONES, MEADOW_EXTRA_PORTAL } from "./zones2";
 
 export interface SpawnDef { mob: string; x: number; z: number; r: number; n: number; lvl: [number, number] }
 export interface BuildingDef { kind: string; x: number; z: number; ry?: number; s?: number }
@@ -90,6 +91,7 @@ const ring = (cx: number, cz: number, r: number, n: number, kind: string, extra:
   Array.from({ length: n }, (_, i) => ({ kind, x: cx + Math.cos((i / n) * Math.PI * 2) * r, z: cz + Math.sin((i / n) * Math.PI * 2) * r, ry: (i / n) * Math.PI * 2, ...extra }));
 
 export const ZONES: Record<ZoneId, ZoneDef> = {
+  ...EXTRA_ZONES,
   meadow: {
     id: "meadow", name: "Опушка Рассвета", levels: "1–12", half: 100,
     sky: { top: "#3f8fe8", mid: "#8ec6ff", horizon: "#fff1d6", fog: "#cfe6f7", fogNear: 60, fogFar: 230, sun: "#fff0c8", sunInt: 3.2, sunPos: [-80, 110, 60], amb: "#b8d0ff", ambInt: 0.5, hemiSky: "#cfe8ff", hemiGround: "#6b8a4a", hemiInt: 1.0 },
@@ -246,4 +248,5 @@ export const ZONES: Record<ZoneId, ZoneDef> = {
   },
 };
 
+ZONES.meadow.portals.push(MEADOW_EXTRA_PORTAL);
 export const ZONE_LIST = Object.values(ZONES);

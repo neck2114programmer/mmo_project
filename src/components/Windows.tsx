@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { useGame, bridge } from "@/game/store";
+import { useGame, bridge, MM } from "@/game/store";
 import { CLASSES } from "@/game/data/classes";
 import { ITEMS, RARITY_COLORS, STAT_NAMES, itemSellPrice, vendorStock } from "@/game/data/items";
 import { SKILLS_BY_CLASS, SKILLS, TIER_LEVELS } from "@/game/data/skills";
@@ -11,7 +11,7 @@ import { ZONES } from "@/game/data/zones";
 import { canLearn, questAvailable, questObjProgress, questObjTarget, resolveItemId, totalSkillPoints, ZONE_NAMES } from "@/game/logic";
 import { xpFor } from "@/game/data/balance";
 import { SLOTS, STAT_KEYS, type SlotId } from "@/game/types";
-import { ItemSlot, SkillTip, Window, tipProps } from "./ui";
+import { Ic, ItemSlot, SkillTip, Window, tipProps } from "./ui";
 import { gearTier } from "@/game/data/items";
 
 const CharacterPreview = dynamic(() => import("./CharacterPreview"), { ssr: false });
@@ -151,7 +151,7 @@ export function SkillsWindow({ onClose }: { onClose: () => void }) {
               onClick={() => st.learn(s.id)}
               draggable={rank > 0 && s.type === "active"} onDragStart={(e) => e.dataTransfer.setData("text/plain", `skill:${s.id}`)}
               {...tipProps(() => <SkillTip s={s} rank={rank} />)}>
-              {s.icon}
+              <Ic v={s.icon} fill />
               <div className="rank">{Array.from({ length: s.maxRank }).map((_, i) => <i key={i} className={i < rank ? "on" : ""} />)}</div>
             </div>
           );
@@ -236,7 +236,7 @@ export function DialogWindow({ npc }: { npc: string }) {
     <div className="dialog panel">
       <div className="win-head">
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div className="portrait" style={{ width: 48, height: 48, fontSize: 24, borderColor: c.color }}>{def.vendor ? "💰" : c.icon}</div>
+          <div className="portrait" style={{ width: 48, height: 48, fontSize: 24, borderColor: c.color }}>{def.vendor ? "💰" : <Ic v={c.icon} fill />}</div>
           <div><h3 style={{ fontSize: 22 }}>{def.name}</h3><div style={{ fontSize: 12, color: "#b8c8ff" }}>{def.title}</div></div>
         </div>
         <div className="win-x" onClick={() => st.openDialog(null)}>✕</div>
@@ -314,15 +314,15 @@ export function MapWindow({ onClose }: { onClose: () => void }) {
       const cv = ref.current, mm = bridge.minimap, d = bridge.mm();
       if (!cv || !mm || !d) return;
       const ctx = cv.getContext("2d")!;
-      const S = cv.width, k = S / 200;
+      const S = cv.width, k = S / MM.span;
       ctx.clearRect(0, 0, S, S);
       ctx.drawImage(mm, 0, 0, S, S);
-      const dot = (x: number, z: number, c: string, r: number) => { ctx.fillStyle = c; ctx.strokeStyle = "#000"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc((x + 100) * k, (z + 100) * k, r, 0, 7); ctx.fill(); ctx.stroke(); };
+      const dot = (x: number, z: number, c: string, r: number) => { ctx.fillStyle = c; ctx.strokeStyle = "#000"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc((x + MM.span / 2) * k, (z + MM.span / 2) * k, r, 0, 7); ctx.fill(); ctx.stroke(); };
       d.portals.forEach(([x, z]) => dot(x, z, "#b88aff", 8));
       d.npcs.forEach(([x, z, mk]) => dot(x, z, mk === "!" ? "#ffe36a" : mk === "?" ? "#7dff9a" : "#6ac8ff", 4.5));
       d.mobs.forEach(([x, z, b]) => dot(x, z, b ? "#ff9a2a" : "#ff4d4d", b ? 7 : 2.5));
       d.players.forEach(([x, z]) => dot(x, z, "#7dff7d", 5));
-      ctx.save(); ctx.translate((d.px + 100) * k, (d.pz + 100) * k); ctx.rotate(-d.yaw + Math.PI);
+      ctx.save(); ctx.translate((d.px + MM.span / 2) * k, (d.pz + MM.span / 2) * k); ctx.rotate(-d.yaw + Math.PI);
       ctx.fillStyle = "#fff"; ctx.strokeStyle = "#000"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, -11); ctx.lineTo(8, 9); ctx.lineTo(0, 4); ctx.lineTo(-8, 9); ctx.closePath(); ctx.stroke(); ctx.fill(); ctx.restore();
     };
     raf = requestAnimationFrame(draw);

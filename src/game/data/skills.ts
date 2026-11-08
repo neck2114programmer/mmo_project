@@ -375,3 +375,7 @@ export function skillDescription(s: SkillDef, rank: number): string {
   if (s.radius) parts.push(`радиус ${s.radius}м`);
   return `${s.desc} (${parts.join(", ")})`;
 }
+
+// ---- стильные SVG-иконки навыков ----
+import { makeIcon as __mk } from "./icons";
+for (const s of Object.values(SKILLS)) s.icon = __mk(s.icon, { color: s.type === "passive" ? CLASSES[s.cls].color : s.color, tier: s.tier, passive: s.type === "passive" });

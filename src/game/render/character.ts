@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import type { Appearance, ClassId, Gender } from "../types";
-import { basicMat, canvasTexture, lathe, limb, mesh, sphere, stdMat, tube } from "./util";
+import { basicMat, lathe, limb, mesh, rimify, sphere, stdMat, tube } from "./util";
 import { TIER_PAL, buildWeapon, type WeaponSet } from "./weapons";
+import { buildEyePatch, buildHeadGeometry, eyeTex, faceShape, faceTexture, hairTexture } from "./face";
 
 export interface CharOpts {
   cls: ClassId;
@@ -65,61 +66,6 @@ const STANCE: Record<ClassId, Stance> = {
   berserker: { shRx: -0.65, shRz: -0.15, elR: -1.0, shLx: -0.75, shLz: 0.15, elL: -1.15, crouch: 0.03, hold: 2 },
   tamer: { shRx: -0.25, shRz: -0.12, elR: -0.95, shLx: -0.05, shLz: 0.2, elL: -0.4, crouch: 0.01, hold: 1 },
 };
-
-// ---------- кэш текстур глаз ----------
-const eyeCache = new Map<string, THREE.CanvasTexture>();
-function eyeTexture(style: number, color: string, female: boolean) {
-  const key = `${style}|${color}|${female}`;
-  const c = eyeCache.get(key);
-  if (c) return c;
-  const tex = canvasTexture(128, 128, (ctx, w, h) => {
-    ctx.clearRect(0, 0, w, h);
-    const sh = [[1, 1, 0], [0.9, 0.8, 0.18], [1.1, 1.15, 0], [0.9, 0.75, -0.12], [1, 0.8, 0], [1, 1.05, 0]][style];
-    const rx = 44 * sh[0], ry = 40 * sh[1];
-    ctx.save();
-    ctx.translate(w / 2, h / 2 + 4);
-    ctx.rotate(sh[2]);
-    ctx.fillStyle = "#fbfbff";
-    ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.clip();
-    const ir = ry * 0.92;
-    const g = ctx.createRadialGradient(0, 4, 2, 0, 0, ir);
-    g.addColorStop(0, "#000000"); g.addColorStop(0.25, color); g.addColorStop(0.85, color); g.addColorStop(1, "#0b0b18");
-    ctx.fillStyle = g;
-    ctx.beginPath(); ctx.ellipse(2, 3, ir * 0.82, ir, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = "#0a0a14";
-    ctx.beginPath(); ctx.ellipse(2, 3, ir * 0.32, ir * 0.42, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = "rgba(255,255,255,0.95)";
-    ctx.beginPath(); ctx.ellipse(-12, -12, 9, 11, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(14, 14, 5, 0, Math.PI * 2); ctx.fill();
-    if (style === 5) { ctx.beginPath(); ctx.arc(10, -4, 4, 0, Math.PI * 2); ctx.fill(); }
-    // верхнее веко
-    ctx.fillStyle = "rgba(60,30,30,0.35)";
-    ctx.beginPath(); ctx.ellipse(0, -ry * 0.8, rx * 1.1, ry * 0.5, 0, 0, Math.PI * 2); ctx.fill();
-    if (style === 4) { ctx.fillStyle = "rgba(0,0,0,0.0)"; }
-    ctx.restore();
-    // линия ресниц
-    ctx.save();
-    ctx.translate(w / 2, h / 2 + 4);
-    ctx.rotate(sh[2]);
-    ctx.strokeStyle = "#140c10";
-    ctx.lineWidth = female ? 9 : 6;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    const lid = style === 4 ? 0.45 : style === 3 ? 0.3 : 0;
-    ctx.ellipse(0, lid * ry * 0.4, rx * 1.02, ry * (1 - lid * 0.2), 0, Math.PI * 1.04, Math.PI * 1.96);
-    ctx.stroke();
-    if (style === 4 || style === 3) { ctx.fillStyle = "#e8c4a8"; ctx.beginPath(); ctx.ellipse(0, -ry * 0.55, rx * 1.05, ry * (0.35 + lid * 0.5), 0, 0, Math.PI * 2); ctx.globalCompositeOperation = "source-atop"; ctx.fill(); ctx.globalCompositeOperation = "source-over"; }
-    if (female || style === 1 || style === 3) {
-      ctx.lineWidth = 6;
-      ctx.beginPath(); ctx.moveTo(rx * 0.95, -ry * 0.3); ctx.quadraticCurveTo(rx * 1.25, -ry * 0.55, rx * 1.4, -ry * 0.95); ctx.stroke();
-      if (female) { ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(rx * 0.7, -ry * 0.75); ctx.quadraticCurveTo(rx * 1.0, -ry * 1.05, rx * 1.2, -ry * 1.3); ctx.stroke(); }
-    }
-    ctx.restore();
-  });
-  eyeCache.set(key, tex);
-  return tex;
-}
 
 function seq(p: number, keys: [number, number][]): number {
   if (p <= keys[0][0]) return keys[0][1];
@@ -192,7 +138,8 @@ export class CharacterModel {
     const metal = stdMat(P.metal, { rough: 0.3, metal: 0.85 });
     const trim = stdMat(P.trim, { rough: 0.28, metal: 0.9, emissive: tier >= 3 ? P.glow : "#000000", ei: tier >= 3 ? 0.25 : 0 });
     const furMat = stdMat(cls === "berserker" ? "#d8d0c4" : "#c9b08a", { rough: 1 });
-    const hairMat = stdMat(app.hairColor, { rough: 0.35, emissive: app.hairColor, ei: 0.12 });
+    const hairTex = hairTexture(app.hairColor);
+    const hairMat = new THREE.MeshStandardMaterial({ color: "#ffffff", map: hairTex, roughness: 0.38, metalness: 0.05, emissive: new THREE.Color("#ffffff"), emissiveMap: hairTex, emissiveIntensity: 0.14, side: THREE.DoubleSide });
     const boneMat = stdMat("#e8e2cf", { rough: 0.7 });
     const wrapMat = stdMat("#d9cfae", { rough: 0.95 });
     const darkMat = stdMat("#1b1618", { rough: 0.9 });
@@ -461,23 +408,11 @@ export class CharacterModel {
     const headG = grp(head, 0, 0.115 * hs, 0);
     headG.scale.setScalar(hs);
     const HR = 0.118;
-    add(headG, mesh(sphere(HR, 0.94, 1.04, 0.98, 28), skinOrBone));
-    add(headG, mesh(sphere(0.088, 0.92, 0.9, 0.95, 20), skinOrBone), 0, -0.06, 0.028);
-    const eyeY = 0.005, eyeX = 0.047;
+    const eyeX = 0.047;
     const surfZ = (x: number, y: number) => HR * 0.98 * Math.sqrt(Math.max(0.05, 1 - (x / (HR * 0.94)) ** 2 - (y / (HR * 1.04)) ** 2));
-    if (!bone || o.eyeGlow) {
-      const es = lerp(0.064, 0.09, app.eyeSize) * (female ? 1.08 : 1);
-      for (const s of [-1, 1]) {
-        const tex = eyeTexture(app.eyeStyle, o.eyeGlow ?? app.eyeColor, female);
-        const m = new THREE.Mesh(new THREE.PlaneGeometry(es, es), new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.08, side: THREE.DoubleSide }));
-        m.position.set(s * eyeX, eyeY, surfZ(s * eyeX, eyeY) + 0.003);
-        m.rotation.y = s * 0.33;
-        m.scale.x = s > 0 ? -1 : 1;
-        headG.add(m);
-        this.eyes.push(m);
-      }
-    }
     if (bone) {
+      add(headG, mesh(sphere(HR, 0.94, 1.04, 0.98, 28), boneMat));
+      add(headG, mesh(sphere(0.088, 0.92, 0.9, 0.95, 20), boneMat), 0, -0.06, 0.028);
       for (const s of [-1, 1]) {
         add(headG, mesh(sphere(0.026, 1, 1.15, 0.7), darkMat), s * eyeX, 0.01, surfZ(s * eyeX, 0.01) - 0.004);
         add(headG, mesh(sphere(0.009), basicMat(o.eyeGlow ?? "#8cff7a")), s * eyeX, 0.01, surfZ(s * eyeX, 0.01) + 0.008);
@@ -485,36 +420,29 @@ export class CharacterModel {
       add(headG, mesh(new THREE.ConeGeometry(0.012, 0.03, 4), darkMat), 0, -0.03, 0.115).rotation.x = Math.PI;
       for (let i = -3; i <= 3; i++) add(headG, mesh(new THREE.BoxGeometry(0.01, 0.014, 0.01), boneMat), i * 0.016, -0.075, 0.1 - Math.abs(i) * 0.008);
     } else {
-      // брови
-      const browC = stdMat(new THREE.Color(app.hairColor).multiplyScalar(0.7), { rough: 0.8 });
-      const bs = [[0.0, 1.0], [0.18, 1.0], [-0.18, 1.2], [0.0, 0.6]][app.brow];
+      const fs = faceShape(app, female);
+      const ftex = faceTexture(app, female);
+      const faceMat = new THREE.MeshStandardMaterial({ map: ftex, roughness: 0.52, metalness: 0, emissive: new THREE.Color("#ffffff"), emissiveMap: ftex, emissiveIntensity: 0.13 });
+      add(headG, mesh(buildHeadGeometry(fs), faceMat));
+      const es = lerp(1.0, 1.35, app.eyeSize) * (female ? 1.08 : 1);
       for (const s of [-1, 1]) {
-        const br = add(headG, mesh(limb(0.0045 * bs[1] + 0.001, 0.003, 0.045), browC), s * (eyeX + 0.002), 0.045, surfZ(s * eyeX, 0.045) + 0.003);
-        br.rotation.z = Math.PI / 2 + s * bs[0]; br.rotation.y = s * 0.4;
-      }
-      add(headG, mesh(sphere(0.011, 1, 0.9, 1.1), skin), 0, -0.022, surfZ(0, -0.022) + 0.006);
-      const mouth = add(headG, mesh(new THREE.TorusGeometry(0.014, 0.0022, 5, 10, Math.PI * 0.85), stdMat("#a64a5a", { rough: 0.5 })), 0, -0.06, surfZ(0, -0.06) + 0.004);
-      mouth.rotation.z = Math.PI * 1.075;
-      if (female || app.eyeStyle === 5) for (const s of [-1, 1]) {
-        const bl = add(headG, new THREE.Mesh(new THREE.CircleGeometry(0.022, 14), new THREE.MeshBasicMaterial({ color: "#ff7a8a", transparent: true, opacity: 0.22, depthWrite: false })), s * 0.065, -0.035, surfZ(s * 0.065, -0.035) + 0.002);
-        bl.rotation.y = s * 0.7;
-      }
-      // метки
-      if (app.mark > 0) {
-        const mc = new THREE.MeshBasicMaterial({ color: app.markColor });
-        if (app.mark === 1) { const sc = add(headG, new THREE.Mesh(new THREE.PlaneGeometry(0.008, 0.07), mc), 0.052, 0.01, surfZ(0.052, 0.01) + 0.004); sc.rotation.z = 0.5; sc.rotation.y = 0.4; }
-        if (app.mark === 2) for (const s of [-1, 1]) for (let i = 0; i < 2; i++) { const st = add(headG, new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.007), mc), s * 0.075, -0.025 - i * 0.017, surfZ(s * 0.075, -0.025) + 0.002); st.rotation.y = s * 0.9; st.rotation.z = s * -0.15; }
-        if (app.mark === 3) { const ru = add(headG, new THREE.Mesh(new THREE.RingGeometry(0.007, 0.012, 3), mc), 0, 0.075, surfZ(0, 0.075) + 0.004); ru.rotation.x = -0.2; }
-        if (app.mark === 4) for (const s of [-1, 1]) add(headG, new THREE.Mesh(new THREE.CircleGeometry(0.006, 8), mc), s * 0.05, -0.028, surfZ(s * 0.05, -0.028) + 0.003).rotation.y = s * 0.4;
+        const patch = buildEyePatch(fs, s, es, eyeTex(app.eyeStyle, o.eyeGlow ?? app.eyeColor, female, !!o.eyeGlow), !!o.eyeGlow);
+        headG.add(patch);
+        this.eyes.push(patch);
       }
     }
     // уши
     if (!bone) {
-      if (app.ears === 0 || app.ears === 1) {
+      if (app.ears === 0) {
         for (const s of [-1, 1]) {
-          const long = app.ears === 1;
-          const ear = add(headG, mesh(new THREE.ConeGeometry(0.022, long ? 0.12 : 0.05, 8), skin), s * HR * 0.9, 0.0, -0.005);
-          ear.rotation.z = -s * (long ? 1.25 : 1.1); ear.scale.z = 0.4; if (long) ear.position.x = s * (HR * 0.9 + 0.045), ear.position.y = 0.02;
+          const ear = add(headG, mesh(sphere(0.021, 0.32, 1.3, 0.85, 14), skin), s * 0.1, -0.004, -0.006);
+          ear.rotation.y = -s * 0.35; ear.rotation.z = s * 0.1;
+          add(headG, mesh(sphere(0.012, 0.3, 1.1, 0.7, 10), stdMat(new THREE.Color(app.skin).multiply(new THREE.Color("#e8a8a0")), { rough: 0.6 })), s * 0.1 + s * 0.003, -0.004, -0.004).rotation.y = -s * 0.35;
+        }
+      } else if (app.ears === 1) {
+        for (const s of [-1, 1]) {
+          const ear = add(headG, mesh(new THREE.ConeGeometry(0.02, 0.13, 10), skin), s * 0.135, 0.028, -0.008);
+          ear.rotation.z = -s * 1.2; ear.scale.z = 0.32;
         }
       } else {
         const fox = app.ears === 3;
@@ -525,6 +453,7 @@ export class CharacterModel {
           ear.rotation.z = -s * 0.35; ear.rotation.x = -0.1;
           this.hairSway.push(ear);
         }
+        for (const s of [-1, 1]) { const ear = add(headG, mesh(sphere(0.02, 0.32, 1.3, 0.85, 12), skin), s * 0.1, -0.004, -0.006); ear.rotation.y = -s * 0.35; }
       }
     }
     // антлеры (друид)
@@ -590,11 +519,30 @@ export class CharacterModel {
       this.extra.push((t) => { rune.rotation.z = t; });
     }
 
-    this.group.traverse((c) => { if ((c as THREE.Mesh).isMesh) c.castShadow = true; });
+    if (cls === "archer" && !bone && o.weapon !== false) this.buildNock();
+    this.group.traverse((c) => { if ((c as THREE.Mesh).isMesh) { c.castShadow = true; rimify((c as THREE.Mesh).material); } });
     this.pose = this.computeBase(0);
   }
 
   private handGlove: null = null;
+  private nock?: THREE.Group;
+  private nockGlow?: THREE.Mesh;
+  private nockRing?: THREE.Mesh;
+
+  private buildNock() {
+    const g = new THREE.Group();
+    const shaft = mesh(limb(0.006, 0.006, 0.62, 6), stdMat("#d8c49a", { rough: 0.6 }), false); shaft.rotation.x = -Math.PI / 2; shaft.position.z = -0.0; g.add(shaft);
+    shaft.position.set(0, 0, 0.66);
+    const tip = mesh(new THREE.ConeGeometry(0.016, 0.07, 6), stdMat("#e8f0ff", { rough: 0.2, metal: 0.9, emissive: "#9ad0ff", ei: 0.8 }), false); tip.rotation.x = Math.PI / 2; tip.position.z = 0.72; g.add(tip);
+    for (let i = 0; i < 3; i++) { const f = new THREE.Mesh(new THREE.PlaneGeometry(0.03, 0.08), new THREE.MeshBasicMaterial({ color: ["#e04040", "#f4f4f4", "#e04040"][i], side: THREE.DoubleSide })); f.position.set(0, 0, 0.1); f.rotation.z = (i / 3) * Math.PI; f.rotation.y = Math.PI / 2; g.add(f); }
+    this.nockGlow = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 10), new THREE.MeshBasicMaterial({ color: "#8ad8ff", transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false }));
+    this.nockGlow.position.z = 0.73; g.add(this.nockGlow);
+    this.nockRing = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.006, 6, 24), new THREE.MeshBasicMaterial({ color: "#bfe8ff", transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false }));
+    this.nockRing.position.z = 0.6; g.add(this.nockRing);
+    g.position.set(0.1, 1.47, 0.06); g.rotation.y = 0.05;
+    g.visible = false; this.root.add(g); this.nock = g;
+  }
+
 
   private buildHair(headG: THREE.Object3D, app: Appearance, mat: THREE.Material, female: boolean, covered: boolean, ..._rest: THREE.Material[]) {
     void _rest;
@@ -602,9 +550,9 @@ export class CharacterModel {
     const HR = 0.118;
     const style = app.hair;
     const cap = (scale = 1.07, theta = 0.62, tilt = -0.28) => {
-      const m = mesh(new THREE.SphereGeometry(HR * scale, 28, 16, 0, Math.PI * 2, 0, Math.PI * Math.min(theta, 0.56)), mat);
-      m.scale.set(0.97, 1.06, 1.0);
-      m.rotation.x = tilt;
+      const m = mesh(new THREE.SphereGeometry(HR * scale, 28, 16, 0, Math.PI * 2, 0, Math.PI * Math.min(theta, 0.5)), mat);
+      m.scale.set(0.9, 1.06, 0.97);
+      m.rotation.x = tilt - 0.22;
       headG.add(m);
       return m;
     };
@@ -621,16 +569,14 @@ export class CharacterModel {
       return mesh(g, mat);
     };
     const bangs = (n: number, len: number, spread = 1) => {
-      for (let i = 0; i < n; i++) {
-        const u = n === 1 ? 0 : i / (n - 1) - 0.5;
-        const ang = u * 2.0 * spread;
-        const s = strand(len * 0.45 * (1 - Math.abs(u) * 0.35), 0.03, 0.5);
+      // чёлка: «шторки» из широких плоских прядей, зачёсанных в стороны
+      void n; void spread;
+      for (const sd of [-1, 1]) for (let k = 0; k < 2; k++) {
+        const s = strand(len * (0.55 - k * 0.12), 0.07 - k * 0.012, 0.2);
         const g = new THREE.Group();
-        g.position.set(Math.sin(ang) * HR * 1.0, 0.095 + Math.cos(ang) * 0.015, Math.cos(ang) * HR * 0.9);
-        g.rotation.y = ang;
-        g.rotation.x = -0.35;
-        g.add(s);
-        headG.add(g);
+        g.position.set(sd * (0.02 + k * 0.035), 0.108 - k * 0.006, HR * 0.62 - k * 0.012);
+        g.rotation.set(-0.3, sd * 0.2, sd * (0.32 + k * 0.12));
+        g.add(s); headG.add(g);
       }
     };
     const hangBack = (len: number, w: number, layers = 3) => {
@@ -1008,6 +954,16 @@ export class CharacterModel {
     });
     this.extra.forEach((fn) => fn(this.t, s));
     this.weapon.update?.(this.t);
+    if (this.nock) {
+      const a = this.act, on = !!a && a.kind === "shoot" && a.p < 0.6 && a.p > 0.04;
+      this.nock.visible = on;
+      if (on && a) {
+        const k = Math.min(1, a.p / 0.5);
+        this.nockGlow!.scale.setScalar(0.4 + k * 1.6 + Math.sin(this.t * 40) * 0.12);
+        this.nockRing!.scale.setScalar(1.6 - k * 1.2); this.nockRing!.rotation.z = this.t * 9;
+        (this.nockRing!.material as THREE.MeshBasicMaterial).opacity = 0.25 + k * 0.7;
+      }
+    }
     // моргание
     this.blinkT -= dt;
     if (this.blinkT < 0) { this.blinkT = 2.5 + Math.random() * 3; this.eyes.forEach((e) => (e.scale.y = 0.12)); }

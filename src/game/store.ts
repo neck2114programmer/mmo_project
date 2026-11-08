@@ -16,6 +16,18 @@ export interface BuffInfo { id: string; name: string; icon: string; end: number;
 export interface Toast { id: number; text: string; kind: "info" | "good" | "bad" | "level" | "quest" }
 export interface CharInfo { id: number; name: string; cls: ClassId; gender: Gender; appearance: Appearance }
 export type WinKey = "inv" | "char" | "skills" | "quests" | "map";
+export interface GfxSettings { quality: "low" | "medium" | "high" | "ultra"; res: number; shadows: boolean; bloom: boolean; view: number; fps: number; fixed: string; auto: boolean; master: number; music: number; sfx: number }
+export const PRESETS: Record<GfxSettings["quality"], Partial<GfxSettings>> = {
+  low: { res: 0.65, shadows: false, bloom: false, view: 0.55 }, medium: { res: 0.85, shadows: true, bloom: false, view: 0.8 },
+  high: { res: 1, shadows: true, bloom: true, view: 1 }, ultra: { res: 1.25, shadows: true, bloom: true, view: 1.3 },
+};
+const DEFAULT_GFX: GfxSettings = { quality: "medium", res: 0.85, shadows: true, bloom: false, view: 0.8, fps: 0, fixed: "auto", auto: true, master: 0.8, music: 0.5, sfx: 0.8 };
+function loadSettings(): GfxSettings {
+  try { if (typeof window !== "undefined") { const r = localStorage.getItem("eld_settings"); if (r) return { ...DEFAULT_GFX, ...JSON.parse(r) }; if ((navigator.hardwareConcurrency ?? 8) <= 4) return { ...DEFAULT_GFX, quality: "low", ...PRESETS.low }; } } catch { /* ignore */ }
+  return DEFAULT_GFX;
+}
+export interface GameEvent { id: string; title: string; desc: string; zone: string; ends: number; status: "active" | "done" | "failed"; info: string }
+export const MM = { span: 200 };
 
 export const bridge: { engine: GameEngine | null; minimap: HTMLCanvasElement | null; mm: () => { px: number; pz: number; yaw: number; mobs: [number, number, boolean][]; npcs: [number, number, string][]; portals: [number, number][]; players: [number, number][] } | null } = {
   engine: null, minimap: null, mm: () => null,
@@ -43,6 +55,13 @@ interface GameState {
   loading: boolean;
   loadingText: string;
   online: number;
+  settings: GfxSettings;
+  setSettings: (p: Partial<GfxSettings>) => void;
+  events: GameEvent[];
+  tod: number;
+  track: string;
+  ui: { settings: boolean; events: boolean };
+  toggleUi: (k: "settings" | "events") => void;
   save: boolean;
   interact: string | null;
   init: (c: CharInfo, ps: PlayerState) => void;
@@ -81,6 +100,10 @@ export const useGame = create<GameState>((set, get) => ({
   win: { inv: false, char: false, skills: false, quests: false, map: false },
   dialog: null, shop: null, chat: [], toasts: [], cooldowns: {}, gcdEnd: 0, autoAttack: false, dead: false,
   zone: "meadow", loading: true, loadingText: "Загрузка мира...", online: 1, save: false, interact: null,
+  settings: loadSettings(),
+  setSettings: (p) => { const s = { ...get().settings, ...p }; try { localStorage.setItem("eld_settings", JSON.stringify(s)); } catch { /* ignore */ } set({ settings: s }); },
+  events: [], tod: 0.4, track: "", ui: { settings: false, events: false },
+  toggleUi: (k) => set((s) => ({ ui: { ...s.ui, [k]: !s.ui[k] } })),
 
   init: (c, ps) => {
     const derived = computeDerived(ps, c.cls);

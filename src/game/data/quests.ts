@@ -1,5 +1,6 @@
 import type { ZoneId } from "../types";
 import { xpFor } from "./balance";
+import { buildQuests } from "./gen";
 
 export type Objective =
   | { type: "kill"; mob: string; n: number; label: string }
@@ -12,6 +13,8 @@ export interface QuestDef {
   intro: string; progress: string; done: string; objectives: Objective[];
   reward: { xp: number; gold: number; items?: { id: string; n: number }[] };
   give?: { id: string; n: number }[];
+  weekly?: boolean;
+  spawn?: { mob: string; x: number; z: number; lvl: number };
 }
 
 export const QUESTS: Record<string, QuestDef> = {};
@@ -180,6 +183,8 @@ Q("c6", "Король-Лич", "aldrik", "aldrik", "crypt", 38, "c5",
   "Король-Лич Малгрот ждёт в северном тронном зале. Уничтожь его филактерию, и проклятие падёт!",
   "Малгрот — в тронном зале на севере.", "Свершилось! Тьма отступила. Ты — величайший герой Эльдории!",
   [kill("lich", 1, "Убить Короля-Лича Малгрота"), col("lich_phylactery", 1, "Добыть филактерию")], 1.5, [{ id: "@weapon:5", n: 1 }, { id: "@legs:5", n: 1 }, { id: "@boots:5", n: 1 }]);
+
+for (const q of buildQuests()) { QUESTS[q.id] = q; QUEST_ORDER.push(q.id); }
 
 export function npcQuests(npcId: string) {
   return QUEST_ORDER.map((id) => QUESTS[id]).filter((q) => q.giver === npcId || q.turnIn === npcId);

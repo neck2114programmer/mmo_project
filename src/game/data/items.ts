@@ -1,6 +1,7 @@
 import type { ClassId, SlotId, Stats } from "../types";
 import { CLASSES, type ArmorType } from "./classes";
 import { CLASS_IDS } from "../types";
+import { extendItems } from "./items2";
 
 export interface ItemDef {
   id: string;
@@ -201,3 +202,4 @@ export function itemSellPrice(id: string): number {
   const it = ITEMS[id];
   return it ? Math.max(1, Math.floor(it.price * 0.3)) : 0;
 }
+extendItems(ITEMS, RARITY_NAMES, RARITY_COLORS);

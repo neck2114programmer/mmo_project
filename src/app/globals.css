@@ -221,3 +221,11 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18p
 .fct-dmg { color: #fff; } .fct-crit { color: #ffd24d; font-size: 32px; } .fct-dot { color: #9dff5a; font-size: 18px; } .fct-hurt { color: #ff5a5a; font-size: 26px; }
 .fct-heal { color: #7dff7a; } .fct-mana { color: #7fb8ff; } .fct-miss { color: #cfd8ff; font-size: 17px; } .fct-xp { color: #d0a8ff; font-size: 17px; }
 @keyframes fctUp { 0% { opacity: 0; transform: translate(-50%, 0) scale(0.6); } 12% { opacity: 1; transform: translate(-50%, -14px) scale(1.25); } 100% { opacity: 0; transform: translate(-50%, -80px) scale(1); } }
+
+.ic-fill { position: absolute; inset: 2px; width: calc(100% - 4px); height: calc(100% - 4px); object-fit: contain; pointer-events: none; filter: drop-shadow(0 2px 3px rgba(0,0,0,0.6)); }
+.ic-inline { width: 1.3em; height: 1.3em; vertical-align: -0.3em; object-fit: contain; }
+.slot .key { z-index: 3; }
+.np-bubble { position: relative; background: #fffdf4 !important; border: 2px solid #3a2a18; border-radius: 16px !important; padding: 7px 12px !important; max-width: 240px !important; margin-bottom: 10px !important; line-height: 1.3; box-shadow: 0 4px 14px rgba(0,0,0,0.55) !important; }
+.np-bubble::after { content: ""; position: absolute; left: 50%; bottom: -9px; width: 14px; height: 14px; background: #fffdf4; border-right: 2px solid #3a2a18; border-bottom: 2px solid #3a2a18; transform: translateX(-50%) rotate(45deg); }
+.np-bubble.show { animation: bubbleIn 0.25s both; }
+@keyframes bubbleIn { from { opacity: 0; transform: translateY(8px) scale(0.8); } to { opacity: 1; transform: none; } }

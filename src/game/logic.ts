@@ -4,14 +4,17 @@ import { ITEMS } from "./data/items";
 import { SKILLS, SKILLS_BY_CLASS, skillRankMul, type Buff, type Passive } from "./data/skills";
 import { QUESTS, type QuestDef } from "./data/quests";
 import { xpFor } from "./data/balance";
+import { NEW_ZONES, REGION, spawnOf, type NewZone } from "./data/gen";
 
 export const SPAWN: Record<ZoneId, { x: number; z: number }> = {
+  ...(Object.fromEntries(NEW_ZONES.map((z) => [z, spawnOf(z)])) as Record<NewZone, { x: number; z: number }>),
   meadow: { x: -18, z: 5 },
   desert: { x: -84, z: 0 },
   forest: { x: -84, z: 0 },
   crypt: { x: 0, z: 76 },
 };
 export const ZONE_NAMES: Record<ZoneId, string> = {
+  ...(Object.fromEntries(NEW_ZONES.map((z) => [z, REGION[z].name])) as Record<NewZone, string>),
   meadow: "Опушка Рассвета",
   desert: "Пески Ал-Хазар",
   forest: "Лес Друидов Эйнвуд",
@@ -276,7 +279,8 @@ export function questIsComplete(ps: PlayerState, q: QuestDef): boolean {
 }
 
 export function questAvailable(ps: PlayerState, q: QuestDef): boolean {
-  if (ps.quests[q.id]) return false;
+  const ex = ps.quests[q.id];
+  if (ex) { if (!(q.weekly && ex.state === "done" && Date.now() - (ex.prog[ex.prog.length - 1] ?? 0) > 7 * 86400000)) return false; }
   if (ps.level < q.level - 3) return false;
   if (q.requires && ps.quests[q.requires]?.state !== "done") return false;
   return true;
@@ -365,6 +369,7 @@ export function turnInQuest(ps: PlayerState, cls: ClassId, q: QuestDef): { level
   if (!qp || qp.state !== "ready") return null;
   for (const o of q.objectives) if (o.type === "collect") removeItem(ps, o.item, o.n);
   qp.state = "done";
+  if (q.weekly) qp.prog = [...qp.prog.slice(0, q.objectives.length), Date.now()];
   ps.gold += q.reward.gold;
   const items: string[] = [];
   for (const r of q.reward.items ?? []) {
